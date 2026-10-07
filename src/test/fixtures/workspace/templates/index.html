@@ -1,0 +1,22 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title th:text="${title}">Title</title>
+</head>
+<body>
+  <main>
+    <h1 th:text="#{home.welcome(${user.name})}">Welcome</h1>
+    <ul>
+      <li th:each="item, stat : ${items}" th:classappend="${stat.odd} ? 'odd' : 'even'">
+        <a th:href="@{/items/{id}(id=${item.id})}" th:text="${item.name}">item</a>
+      </li>
+    </ul>
+    <p>Total: [[${#lists.size(items)}]]</p>
+  </main>
+  <div th:replace="~{fragments/footer :: copy}"></div>
+  <script th:inline="javascript">
+    const items = /*[[${items}]]*/ [];
+  </script>
+</body>
+</html>

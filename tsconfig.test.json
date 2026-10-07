@@ -1,0 +1,24 @@
+{
+  "$schema": "https://www.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "lib": [
+      "es2022"
+    ],
+    "outDir": "out-test",
+    "rootDir": "./src/test",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": [
+      "node",
+      "mocha"
+    ]
+  },
+  "include": [
+    "./src/test/**/*.ts"
+  ]
+}

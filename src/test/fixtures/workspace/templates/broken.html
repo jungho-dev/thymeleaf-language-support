@@ -1,0 +1,16 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Broken</title>
+</head>
+<body>
+  <p th:text="${user.name"></p>
+  <ul>
+    <li th:each="${items}"></li>
+  </ul>
+  <div th:include="fragments/footer :: copy"></div>
+  <span th:txet="${x}"></span>
+  <div th:replace="~{fragments/missing :: copy}"></div>
+</body>
+</html>

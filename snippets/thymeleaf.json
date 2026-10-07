@@ -1,0 +1,216 @@
+{
+  "thymeleaf html skeleton": {
+    "prefix": "th-html",
+    "body": [
+      "<!DOCTYPE html>",
+      "<html xmlns:th=\"http://www.thymeleaf.org\" lang=\"${1:ko}\">",
+      "<head>",
+      "\t<meta charset=\"UTF-8\">",
+      "\t<title th:text=\"${2:#{title}}\">${3:Title}</title>",
+      "</head>",
+      "<body>",
+      "\t$0",
+      "</body>",
+      "</html>"
+    ],
+    "description": "Create a Thymeleaf HTML template skeleton"
+  },
+  "thymeleaf text": {
+    "prefix": "th:text",
+    "body": [
+      "th:text=\"\\${${1:value}}\""
+    ],
+    "description": "Escaped text attribute"
+  },
+  "thymeleaf utext": {
+    "prefix": "th:utext",
+    "body": [
+      "th:utext=\"\\${${1:html}}\""
+    ],
+    "description": "Unescaped text attribute"
+  },
+  "thymeleaf if": {
+    "prefix": "th:if",
+    "body": [
+      "th:if=\"\\${${1:condition}}\""
+    ],
+    "description": "Conditional rendering"
+  },
+  "thymeleaf unless": {
+    "prefix": "th:unless",
+    "body": [
+      "th:unless=\"\\${${1:condition}}\""
+    ],
+    "description": "Negated conditional rendering"
+  },
+  "thymeleaf each": {
+    "prefix": "th:each",
+    "body": [
+      "th:each=\"${1:item}, ${2:stat} : \\${${3:items}}\""
+    ],
+    "description": "Iteration with status variable"
+  },
+  "thymeleaf each block": {
+    "prefix": "th-each-block",
+    "body": [
+      "<${1:tr} th:each=\"${2:item} : \\${${3:items}}\">",
+      "\t<${4:td} th:text=\"\\${${2:item}.${5:name}}\">${6:placeholder}</${4:td}>",
+      "</${1:tr}>"
+    ],
+    "description": "Iteration element with inner text"
+  },
+  "thymeleaf with": {
+    "prefix": "th:with",
+    "body": [
+      "th:with=\"${1:name}=\\${${2:value}}\""
+    ],
+    "description": "Local variable definition"
+  },
+  "thymeleaf switch": {
+    "prefix": "th-switch",
+    "body": [
+      "<div th:switch=\"\\${${1:value}}\">",
+      "\t<p th:case=\"'${2:first}'\">${3:First}</p>",
+      "\t<p th:case=\"*\">${4:Default}</p>",
+      "</div>"
+    ],
+    "description": "Switch/case block"
+  },
+  "thymeleaf fragment": {
+    "prefix": "th:fragment",
+    "body": [
+      "th:fragment=\"${1:name}${2:(${3:param})}\""
+    ],
+    "description": "Fragment definition"
+  },
+  "thymeleaf replace": {
+    "prefix": "th:replace",
+    "body": [
+      "th:replace=\"~{${1:fragments/common} :: ${2:fragment}}\""
+    ],
+    "description": "Replace host element with a fragment"
+  },
+  "thymeleaf insert": {
+    "prefix": "th:insert",
+    "body": [
+      "th:insert=\"~{${1:fragments/common} :: ${2:fragment}}\""
+    ],
+    "description": "Insert a fragment as the element body"
+  },
+  "thymeleaf href": {
+    "prefix": "th:href",
+    "body": [
+      "th:href=\"@{${1:/path}${2:(${3:id}=\\${${4:value}})}}\""
+    ],
+    "description": "Link URL expression"
+  },
+  "thymeleaf src": {
+    "prefix": "th:src",
+    "body": [
+      "th:src=\"@{${1:/static/path}}\""
+    ],
+    "description": "Resource URL expression"
+  },
+  "thymeleaf object form": {
+    "prefix": "th-form",
+    "body": [
+      "<form th:action=\"@{${1:/submit}}\" th:object=\"\\${${2:form}}\" method=\"${3:post}\">",
+      "\t<input type=\"text\" th:field=\"*{${4:field}}\">",
+      "\t<span th:if=\"\\${#fields.hasErrors('${4:field}')}\" th:errors=\"*{${4:field}}\"></span>",
+      "\t$0",
+      "</form>"
+    ],
+    "description": "Spring form bound to a command object"
+  },
+  "thymeleaf field": {
+    "prefix": "th:field",
+    "body": [
+      "th:field=\"*{${1:field}}\""
+    ],
+    "description": "Spring form field binding"
+  },
+  "thymeleaf errors": {
+    "prefix": "th:errors",
+    "body": [
+      "th:errors=\"*{${1:field}}\""
+    ],
+    "description": "Spring field error messages"
+  },
+  "thymeleaf block": {
+    "prefix": "th-block",
+    "body": [
+      "<th:block th:${1|each,if,unless,switch,with|}=\"${2}\">",
+      "\t$0",
+      "</th:block>"
+    ],
+    "description": "Synthetic container element"
+  },
+  "thymeleaf inline javascript": {
+    "prefix": "th-inline-js",
+    "body": [
+      "<script th:inline=\"javascript\">",
+      "\tconst ${1:value} = /*[[\\${${2:model}}]]*/ ${3:null};",
+      "\t$0",
+      "</script>"
+    ],
+    "description": "JavaScript inlining with natural template default"
+  },
+  "thymeleaf inline text": {
+    "prefix": "th-inline-text",
+    "body": [
+      "[[\\${${1:value}}]]"
+    ],
+    "description": "Escaped inline text expression"
+  },
+  "thymeleaf inline unescaped": {
+    "prefix": "th-inline-utext",
+    "body": [
+      "[(\\${${1:value}})]"
+    ],
+    "description": "Unescaped inline text expression"
+  },
+  "thymeleaf parser comment": {
+    "prefix": "th-comment",
+    "body": [
+      "<!--/* $0 */-->"
+    ],
+    "description": "Parser-level comment removed at render time"
+  },
+  "thymeleaf prototype comment": {
+    "prefix": "th-prototype",
+    "body": [
+      "<!--/*/",
+      "\t$0",
+      "/*/-->"
+    ],
+    "description": "Prototype-only comment rendered at render time"
+  },
+  "thymeleaf message": {
+    "prefix": "th-message",
+    "body": [
+      "#{${1:message.key}${2:(${3:param})}}"
+    ],
+    "description": "Message expression"
+  },
+  "thymeleaf literal substitution": {
+    "prefix": "th-literal",
+    "body": [
+      "|${1:Text} \\${${2:value}}|"
+    ],
+    "description": "Literal substitution"
+  },
+  "thymeleaf layout decorate": {
+    "prefix": "layout:decorate",
+    "body": [
+      "layout:decorate=\"~{${1:layouts/default}}\""
+    ],
+    "description": "Layout dialect decoration"
+  },
+  "thymeleaf sec authorize": {
+    "prefix": "sec:authorize",
+    "body": [
+      "sec:authorize=\"${1|isAuthenticated(),isAnonymous(),hasRole('ROLE_ADMIN'),hasAuthority('ADMIN')|}\""
+    ],
+    "description": "Spring Security authorization"
+  }
+}

@@ -1,0 +1,15 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Fragments</title>
+</head>
+<body>
+  <footer th:fragment="copy">
+    &copy; 2026 Example
+  </footer>
+  <nav th:fragment="links(active)">
+    <a th:href="@{/}" th:classappend="${active == 'home'} ? 'active'">Home</a>
+  </nav>
+</body>
+</html>

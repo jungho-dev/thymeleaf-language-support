@@ -1,0 +1,592 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Thymeleaf Injection",
+  "scopeName": "thymeleaf.injection",
+  "injectionSelector": "L:text.html -comment -string -source -meta.embedded, L:text.html source.js comment.block, L:text.html source.css comment.block",
+  "patterns": [
+    {
+      "include": "#dialect-attribute-double"
+    },
+    {
+      "include": "#dialect-attribute-single"
+    },
+    {
+      "include": "#prototype-comment"
+    },
+    {
+      "include": "#parser-comment"
+    },
+    {
+      "include": "#inline-escaped"
+    },
+    {
+      "include": "#inline-unescaped"
+    }
+  ],
+  "repository": {
+    "dialect-attribute-double": {
+      "begin": "(?<![\\w:.-])((?:th|sec|layout):|data-(?:th|sec|layout)-)([\\w.-]+)\\s*(=)\\s*(\")",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.other.attribute-name.html entity.other.attribute-name.thymeleaf"
+        },
+        "2": {
+          "name": "entity.other.attribute-name.html entity.other.attribute-name.thymeleaf"
+        },
+        "3": {
+          "name": "punctuation.separator.key-value.html"
+        },
+        "4": {
+          "name": "punctuation.definition.string.begin.html"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.html"
+        }
+      },
+      "name": "meta.attribute.thymeleaf.html",
+      "contentName": "string.quoted.double.html meta.attribute-value.thymeleaf",
+      "patterns": [
+        {
+          "include": "#attribute-value"
+        }
+      ]
+    },
+    "dialect-attribute-single": {
+      "begin": "(?<![\\w:.-])((?:th|sec|layout):|data-(?:th|sec|layout)-)([\\w.-]+)\\s*(=)\\s*(')",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.other.attribute-name.html entity.other.attribute-name.thymeleaf"
+        },
+        "2": {
+          "name": "entity.other.attribute-name.html entity.other.attribute-name.thymeleaf"
+        },
+        "3": {
+          "name": "punctuation.separator.key-value.html"
+        },
+        "4": {
+          "name": "punctuation.definition.string.begin.html"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.html"
+        }
+      },
+      "name": "meta.attribute.thymeleaf.html",
+      "contentName": "string.quoted.single.html meta.attribute-value.thymeleaf",
+      "patterns": [
+        {
+          "include": "#attribute-value"
+        }
+      ]
+    },
+    "attribute-value": {
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#literal-substitution"
+        },
+        {
+          "include": "#preprocessing"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#constant"
+        },
+        {
+          "include": "#word-operator"
+        },
+        {
+          "include": "#fragment-operator"
+        },
+        {
+          "match": "(?<=\\s)(?:\\?:|[-+*/%!=<>?:]+)(?=\\s)",
+          "name": "keyword.operator.thymeleaf"
+        }
+      ]
+    },
+    "expressions": {
+      "patterns": [
+        {
+          "include": "#variable-expression"
+        },
+        {
+          "include": "#selection-expression"
+        },
+        {
+          "include": "#message-expression"
+        },
+        {
+          "include": "#link-expression"
+        },
+        {
+          "include": "#fragment-expression"
+        }
+      ]
+    },
+    "variable-expression": {
+      "begin": "\\$\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.variable.thymeleaf",
+      "patterns": [
+        {
+          "include": "#ognl"
+        }
+      ]
+    },
+    "selection-expression": {
+      "begin": "\\*\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.selection.thymeleaf",
+      "patterns": [
+        {
+          "include": "#ognl"
+        }
+      ]
+    },
+    "message-expression": {
+      "begin": "#\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.message.thymeleaf",
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#preprocessing"
+        },
+        {
+          "begin": "\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.thymeleaf"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.thymeleaf"
+            }
+          },
+          "name": "meta.message-parameters.thymeleaf",
+          "patterns": [
+            {
+              "include": "#ognl"
+            }
+          ]
+        },
+        {
+          "match": "[\\w.\\-]+",
+          "name": "support.constant.message-key.thymeleaf"
+        }
+      ]
+    },
+    "link-expression": {
+      "begin": "@\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.link.thymeleaf",
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#preprocessing"
+        },
+        {
+          "begin": "\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.thymeleaf"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.thymeleaf"
+            }
+          },
+          "name": "meta.link-parameters.thymeleaf",
+          "patterns": [
+            {
+              "match": "([\\w.\\-]+)\\s*(=)",
+              "captures": {
+                "1": {
+                  "name": "variable.parameter.thymeleaf"
+                },
+                "2": {
+                  "name": "keyword.operator.assignment.thymeleaf"
+                }
+              }
+            },
+            {
+              "include": "#ognl"
+            }
+          ]
+        },
+        {
+          "match": "\\{[\\w.]*\\}",
+          "name": "variable.other.path-variable.thymeleaf"
+        },
+        {
+          "match": "[^{}()$*#@~]+",
+          "name": "string.other.link.thymeleaf"
+        }
+      ]
+    },
+    "fragment-expression": {
+      "begin": "~\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.fragment.thymeleaf",
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#preprocessing"
+        },
+        {
+          "include": "#fragment-operator"
+        },
+        {
+          "begin": "\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.thymeleaf"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.thymeleaf"
+            }
+          },
+          "name": "meta.fragment-parameters.thymeleaf",
+          "patterns": [
+            {
+              "include": "#ognl"
+            }
+          ]
+        },
+        {
+          "match": "#[\\w-]+",
+          "name": "entity.other.attribute-name.id.thymeleaf"
+        },
+        {
+          "match": "[\\w/.\\-]+",
+          "name": "entity.name.fragment.thymeleaf"
+        }
+      ]
+    },
+    "literal-substitution": {
+      "begin": "\\|",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.thymeleaf"
+        }
+      },
+      "end": "\\|",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.thymeleaf"
+        }
+      },
+      "name": "string.quoted.other.literal-substitution.thymeleaf",
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#preprocessing"
+        }
+      ]
+    },
+    "preprocessing": {
+      "begin": "__",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.preprocessing.begin.thymeleaf"
+        }
+      },
+      "end": "__",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.preprocessing.end.thymeleaf"
+        }
+      },
+      "name": "meta.preprocessing.thymeleaf",
+      "patterns": [
+        {
+          "include": "#expressions"
+        }
+      ]
+    },
+    "ognl": {
+      "patterns": [
+        {
+          "include": "#expressions"
+        },
+        {
+          "include": "#preprocessing"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#constant"
+        },
+        {
+          "match": "#[A-Za-z_]\\w*",
+          "name": "support.class.utility.thymeleaf"
+        },
+        {
+          "match": "@(?!\\{)[A-Za-z_]\\w*",
+          "name": "support.class.bean.thymeleaf"
+        },
+        {
+          "match": "\\b(T)(\\()([\\w.$]+)(\\))",
+          "captures": {
+            "1": {
+              "name": "support.function.type.thymeleaf"
+            },
+            "2": {
+              "name": "punctuation.section.parameters.begin.thymeleaf"
+            },
+            "3": {
+              "name": "entity.name.type.thymeleaf"
+            },
+            "4": {
+              "name": "punctuation.section.parameters.end.thymeleaf"
+            }
+          }
+        },
+        {
+          "match": "\\b(and|or|not|eq|ne|gt|ge|lt|le|div|mod|instanceof|matches|new)\\b",
+          "name": "keyword.operator.word.thymeleaf"
+        },
+        {
+          "match": "(?<![.#@\\w$])(param|session|application)\\b(?=\\s*[.\\[])",
+          "name": "variable.language.thymeleaf"
+        },
+        {
+          "match": "([A-Za-z_$][\\w$]*)\\s*(?=\\()",
+          "name": "entity.name.function.thymeleaf"
+        },
+        {
+          "match": "(?<=\\.)([A-Za-z_$][\\w$]*)",
+          "name": "variable.other.property.thymeleaf"
+        },
+        {
+          "match": "[A-Za-z_$][\\w$]*",
+          "name": "variable.other.thymeleaf"
+        },
+        {
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "meta.brace.curly.thymeleaf"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "meta.brace.curly.thymeleaf"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#ognl"
+            }
+          ]
+        },
+        {
+          "match": "\\?:|\\|\\||&&|[-+*/%!=<>?:]",
+          "name": "keyword.operator.thymeleaf"
+        },
+        {
+          "match": "[.,;]",
+          "name": "punctuation.separator.thymeleaf"
+        },
+        {
+          "match": "[\\[\\]()]",
+          "name": "meta.brace.thymeleaf"
+        }
+      ]
+    },
+    "string-single": {
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.thymeleaf"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.thymeleaf"
+        }
+      },
+      "name": "string.quoted.single.thymeleaf",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.thymeleaf"
+        }
+      ]
+    },
+    "number": {
+      "match": "\\b\\d+(?:\\.\\d+)?\\b",
+      "name": "constant.numeric.thymeleaf"
+    },
+    "constant": {
+      "match": "\\b(true|false|null)\\b",
+      "name": "constant.language.thymeleaf"
+    },
+    "word-operator": {
+      "match": "\\b(and|or|not|eq|ne|gt|ge|lt|le)\\b",
+      "name": "keyword.operator.word.thymeleaf"
+    },
+    "fragment-operator": {
+      "match": "::",
+      "name": "keyword.operator.fragment-selector.thymeleaf"
+    },
+    "inline-escaped": {
+      "begin": "\\[\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\]\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.inline.escaped.thymeleaf",
+      "patterns": [
+        {
+          "include": "#attribute-value"
+        }
+      ]
+    },
+    "inline-unescaped": {
+      "begin": "\\[\\(",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.thymeleaf"
+        }
+      },
+      "end": "\\)\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.thymeleaf"
+        }
+      },
+      "name": "meta.template.expression.inline.unescaped.thymeleaf",
+      "patterns": [
+        {
+          "include": "#attribute-value"
+        }
+      ]
+    },
+    "parser-comment": {
+      "begin": "<!--/\\*(?!/)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.begin.thymeleaf"
+        }
+      },
+      "end": "\\*/-->",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.end.thymeleaf"
+        }
+      },
+      "name": "comment.block.html comment.block.parser-level.thymeleaf"
+    },
+    "prototype-comment": {
+      "begin": "<!--/\\*/",
+      "beginCaptures": {
+        "0": {
+          "name": "comment.block.html punctuation.definition.comment.prototype-only.thymeleaf"
+        }
+      },
+      "end": "/\\*/-->",
+      "endCaptures": {
+        "0": {
+          "name": "comment.block.html punctuation.definition.comment.prototype-only.thymeleaf"
+        }
+      },
+      "name": "meta.comment.prototype-only.thymeleaf",
+      "patterns": [
+        {
+          "include": "text.html.basic"
+        }
+      ]
+    }
+  }
+}
