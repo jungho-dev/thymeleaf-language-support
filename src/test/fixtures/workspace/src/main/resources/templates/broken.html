@@ -12,5 +12,10 @@
   <div th:include="fragments/footer :: copy"></div>
   <span th:txet="${x}"></span>
   <div th:replace="~{fragments/missing :: copy}"></div>
+  <p th:text="${user.nmae}"></p>
+  <p th:text="${missing}"></p>
+  <p th:text="#{nope.key}"></p>
+  <a th:href="@{/nowhere}">x</a>
+  <p th:text="Hello World"></p>
 </body>
 </html>

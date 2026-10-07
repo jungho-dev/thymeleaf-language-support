@@ -1,12 +1,12 @@
 {
   "name": "thymeleaf-language-support",
   "displayName": "Thymeleaf Language Support",
-  "description": "Thymeleaf syntax highlighting, diagnostics, completion, hover, and fragment navigation for HTML templates in VSCode",
+  "description": "Thymeleaf syntax highlighting, expression parser diagnostics, Spring controller model validation, completion, hover, navigation, and fragment tooling for HTML templates in VSCode",
   "publisher": "JUNGHO",
   "icon": "logo.png",
   "license": "Apache-2.0",
   "main": "./out/extension.js",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/jungho-dev/thymeleaf-language-support.git"
@@ -20,13 +20,15 @@
   "keywords": [
     "thymeleaf",
     "spring",
+    "spring-boot",
     "template",
     "html",
     "syntax",
     "diagnostics"
   ],
   "activationEvents": [
-    "onLanguage:html"
+    "onLanguage:html",
+    "onLanguage:java"
   ],
   "contributes": {
     "outputChannels": [
@@ -62,6 +64,12 @@
         "icon": "$(references)"
       },
       {
+        "command": "Thymeleaf-Language-Support.rebuildIndex",
+        "title": "Rebuild Template, Controller, and Message Index",
+        "category": "Thymeleaf-Language-Support",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "Thymeleaf-Language-Support.openLogOutput",
         "title": "Open Log Output",
         "category": "Thymeleaf-Language-Support"
@@ -73,6 +81,16 @@
           "command": "Thymeleaf-Language-Support.gotoFragment",
           "when": "resourceLangId == html",
           "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "Thymeleaf-Language-Support.openTemplate",
+          "when": "false"
+        },
+        {
+          "command": "Thymeleaf-Language-Support.showAttributeUsages",
+          "when": "false"
         }
       ]
     },
@@ -95,7 +113,7 @@
         "Thymeleaf-Language-Support.diagnosticsEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable Thymeleaf template diagnostics (expression syntax, attribute validation, fragment references)"
+          "description": "Enable Thymeleaf template diagnostics (expression syntax, attribute validation, model and fragment references)"
         },
         "Thymeleaf-Language-Support.disabledDiagnosticCodes": {
           "type": "array",
@@ -110,6 +128,7 @@
               "thymeleaf-nested-expression",
               "thymeleaf-unclosed-literal-substitution",
               "thymeleaf-invalid-message-key",
+              "thymeleaf-expression-syntax",
               "thymeleaf-missing-value",
               "thymeleaf-empty-value",
               "thymeleaf-unknown-attribute",
@@ -123,7 +142,17 @@
               "thymeleaf-object-expression",
               "thymeleaf-unescaped-text",
               "thymeleaf-unclosed-inline",
-              "thymeleaf-unknown-template"
+              "thymeleaf-link-path-variable",
+              "thymeleaf-unknown-template",
+              "thymeleaf-unknown-fragment",
+              "thymeleaf-fragment-arity",
+              "thymeleaf-unknown-model-attribute",
+              "thymeleaf-unknown-property",
+              "thymeleaf-selection-without-object",
+              "thymeleaf-unknown-message-key",
+              "thymeleaf-message-arity",
+              "thymeleaf-unknown-link",
+              "thymeleaf-missing-view"
             ]
           },
           "default": [],
@@ -132,7 +161,32 @@
         "Thymeleaf-Language-Support.languageFeaturesEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable attribute and utility-object completion, hover documentation, fragment symbols, and fragment go-to-definition"
+          "description": "Enable completion, hover, go-to-definition, references, signature help, document links, and fragment symbols"
+        },
+        "Thymeleaf-Language-Support.javaEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Spring controllers and classes to validate model attributes and properties, and to provide Java-side CodeLens and navigation"
+        },
+        "Thymeleaf-Language-Support.modelValidationEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report ${...} roots that no mapped controller adds and properties that do not exist on the inferred Java type"
+        },
+        "Thymeleaf-Language-Support.linkValidationEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report @{...} paths that match neither a controller mapping nor a static resource"
+        },
+        "Thymeleaf-Language-Support.messageValidationEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report #{...} keys missing from the indexed message bundles and argument count mismatches"
+        },
+        "Thymeleaf-Language-Support.codeLensEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CodeLens on controller view names and model attributes"
         },
         "Thymeleaf-Language-Support.additionalAttributes": {
           "type": "array",
@@ -152,6 +206,40 @@
           ],
           "description": "Glob prefixes under which fragment template names are resolved (Thymeleaf template resolver prefix)"
         },
+        "Thymeleaf-Language-Support.javaGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/src/main/java/**/*.java"
+          ],
+          "description": "Glob patterns of Java sources to index for controllers, model attributes, and types"
+        },
+        "Thymeleaf-Language-Support.messageGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/src/main/resources/**/messages*.properties",
+            "**/src/main/resources/i18n/**/*.properties"
+          ],
+          "description": "Glob patterns of message bundles used for #{...} validation and completion"
+        },
+        "Thymeleaf-Language-Support.staticGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/src/main/resources/static/**",
+            "**/src/main/resources/public/**",
+            "**/src/main/resources/resources/**",
+            "**/src/main/resources/META-INF/resources/**"
+          ],
+          "description": "Glob patterns of static resource roots used for @{...} validation and completion"
+        },
         "Thymeleaf-Language-Support.searchExclude": {
           "type": "array",
           "items": {
@@ -166,7 +254,7 @@
             "**/dist/**",
             "**/.git/**"
           ],
-          "description": "Glob patterns excluded from template file resolution"
+          "description": "Glob patterns excluded from template, Java, message, and static resource scanning"
         },
         "Thymeleaf-Language-Support.maxDocumentLength": {
           "type": "number",

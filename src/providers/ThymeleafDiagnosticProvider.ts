@@ -1,9 +1,9 @@
 // providers/ThymeleafDiagnosticProvider.ts
 
 import { vscode } from "@exportLibs";
-import { analyzeTemplate, parseFragmentReference } from "@exportModels";
+import { analyzeSemantics, analyzeTemplate, buildScopes } from "@exportModels";
 import { logger } from "@exportScripts";
-import type { DiagnosticSeverityType, TemplateAttributeType, TemplateDiagnosticType, TemplateIndexServiceType } from "@exportTypes";
+import type { DiagnosticSeverityType, ExpressionIssueType, JavaIndexServiceType, SemanticIndexType, TemplateAttributeType, TemplateIndexServiceType } from "@exportTypes";
 
 const MAIN = `Thymeleaf-Language-Support`;
 const DIAGNOSTIC_SOURCE = `Thymeleaf`;
@@ -16,9 +16,9 @@ const SEVERITY_MAP: Readonly<Record<DiagnosticSeverityType, vscode.DiagnosticSev
 };
 
 // ------------------------------------------------------------------------------
-// 1. Thymeleaf 템플릿 진단
+// 1. Thymeleaf 템플릿 진단 (구문 + 시맨틱)
 // ------------------------------------------------------------------------------
-export const ThymeleafDiagnosticProvider = (indexService: TemplateIndexServiceType) => {
+export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, semanticIndex: SemanticIndexType) => {
   // 0. 변수 설정 ----------------------------------------------------------------------------
   const collection = vscode.languages.createDiagnosticCollection(DIAGNOSTIC_SOURCE);
 
@@ -30,6 +30,9 @@ export const ThymeleafDiagnosticProvider = (indexService: TemplateIndexServiceTy
       "disabledCodes": new Set(config.get<string[]>(`disabledDiagnosticCodes`, [])),
       "additionalAttributes": config.get<string[]>(`additionalAttributes`, []),
       "maxDocumentLength": config.get<number>(`maxDocumentLength`, 300_000),
+      "modelValidation": config.get<boolean>(`modelValidationEnabled`, true),
+      "linkValidation": config.get<boolean>(`linkValidationEnabled`, true),
+      "messageValidation": config.get<boolean>(`messageValidationEnabled`, true),
     };
   };
 
@@ -37,9 +40,10 @@ export const ThymeleafDiagnosticProvider = (indexService: TemplateIndexServiceTy
   const isTarget = (document: vscode.TextDocument): boolean => document.languageId === `html` && document.uri.scheme !== `git`;
 
   // 1-3. 모델 진단 -> VS Code 진단 변환
-  const toDiagnostic = (entry: TemplateDiagnosticType): vscode.Diagnostic => {
-    const range = new vscode.Range(entry.line, entry.column, entry.line, entry.column + entry.length);
-    const diagnostic = new vscode.Diagnostic(range, entry.message, SEVERITY_MAP[entry.severity]);
+  const toDiagnostic = (document: vscode.TextDocument, entry: ExpressionIssueType): vscode.Diagnostic => {
+    const start = document.positionAt(entry.offset);
+    const end = document.positionAt(entry.offset + entry.length);
+    const diagnostic = new vscode.Diagnostic(new vscode.Range(start, end), entry.message, SEVERITY_MAP[entry.severity]);
     diagnostic.source = DIAGNOSTIC_SOURCE;
     diagnostic.code = entry.code;
     if (entry.code === `thymeleaf-deprecated-attribute`) {
@@ -51,22 +55,20 @@ export const ThymeleafDiagnosticProvider = (indexService: TemplateIndexServiceTy
   // 1-4. 프래그먼트 참조 템플릿 존재 검사
   const buildTemplateDiagnostics = async (document: vscode.TextDocument, attributes: TemplateAttributeType[]): Promise<vscode.Diagnostic[]> => {
     const diagnostics: vscode.Diagnostic[] = [];
-    const refs = attributes.filter((attribute) => FRAGMENT_REF_NAMES.has(attribute.name) && attribute.hasValue);
-    for (const attribute of refs) {
-      const reference = parseFragmentReference(attribute.value);
-      if (!reference || reference.dynamic || reference.template === ``) {
-        continue;
+    const checked = new Set<string>();
+    for (const attribute of attributes.filter((candidate) => FRAGMENT_REF_NAMES.has(candidate.name) && candidate.hasValue)) {
+      for (const node of attribute.parsed.expressions) {
+        if (node.kind !== `fragment` || !node.template || node.template.dynamic || node.template.value === `` || node.template.value === `this`) {
+          continue;
+        }
+        const key = `${node.template.value}@${node.template.offset}`;
+        if (checked.has(key)) {
+          continue;
+        }
+        checked.add(key);
+        const resolved = await templateIndex.resolveTemplate(node.template.value, document.uri);
+        resolved || diagnostics.push(toDiagnostic(document, { "code": `thymeleaf-unknown-template`, "message": `Template '${node.template.value}' was not found under the configured template roots.`, "severity": `warning`, "offset": node.template.offset, "length": node.template.length }));
       }
-      const resolved = await indexService.resolveTemplate(reference.template, document.uri);
-      if (resolved) {
-        continue;
-      }
-      const start = document.positionAt(attribute.valueOffset);
-      const end = document.positionAt(attribute.valueOffset + attribute.value.length);
-      const diagnostic = new vscode.Diagnostic(new vscode.Range(start, end), `Template '${reference.template}' was not found under the configured template roots.`, vscode.DiagnosticSeverity.Warning);
-      diagnostic.source = DIAGNOSTIC_SOURCE;
-      diagnostic.code = `thymeleaf-unknown-template`;
-      diagnostics.push(diagnostic);
     }
     return diagnostics;
   };
@@ -88,7 +90,19 @@ export const ThymeleafDiagnosticProvider = (indexService: TemplateIndexServiceTy
       collection.delete(document.uri);
       return;
     }
-    const diagnostics = analysis.diagnostics.map(toDiagnostic);
+    const diagnostics = analysis.diagnostics.map((entry) => toDiagnostic(document, entry));
+
+    // 시맨틱 진단 (Java 인덱스 준비 후 모델 검증)
+    const templateName = templateIndex.templateNameOf(document.uri);
+    const scopes = buildScopes(analysis.template);
+    const semantic = analyzeSemantics(analysis.template, scopes, semanticIndex, {
+      "templateName": templateName,
+      "modelValidation": config.modelValidation && javaIndex.isReady(),
+      "linkValidation": config.linkValidation,
+      "messageValidation": config.messageValidation,
+    });
+    diagnostics.push(...semantic.diagnostics.map((entry) => toDiagnostic(document, entry)));
+
     try {
       diagnostics.push(...await buildTemplateDiagnostics(document, analysis.template.attributes));
     }

@@ -46,14 +46,17 @@ export interface ExpressionArgType {
   offset: number;
   length: number;
 }
+export interface ExpressionChainType {
+  root: ChainRootType;
+  segments: ChainSegmentType[];
+}
 export interface ExpressionNodeType {
   kind: ExpressionKindType;
   offset: number;
   length: number;
   inner: string;
   innerOffset: number;
-  root?: ChainRootType;
-  chain: ChainSegmentType[];
+  chains: ExpressionChainType[];
   key?: ExpressionPartType;
   path?: ExpressionPartType;
   pathVariables: string[];
@@ -219,6 +222,7 @@ export type ModelAttributeSourceType = `addAttribute` | `param` | `modelAttribut
 export interface ModelAttributeType {
   name: string;
   typeName?: string;
+  valueExpr?: string;
   fsPath: string;
   line: number;
   column: number;
@@ -226,6 +230,13 @@ export interface ModelAttributeType {
   offset: number;
   source: ModelAttributeSourceType;
   methodName: string;
+}
+export interface JavaInferenceContextType {
+  params: Map<string, string>;
+  locals: Map<string, string>;
+  fields: Map<string, string>;
+  ownerType?: JavaTypeType;
+  lookupType: (simpleName: string) => JavaTypeType | undefined;
 }
 export interface JavaHandlerType {
   methodName: string;
@@ -333,15 +344,17 @@ export interface SemanticOptionsType {
 }
 export interface SemanticResolutionType {
   node: ExpressionNodeType;
+  chain: ExpressionChainType;
   rootKind: `local` | `model` | `context` | `utility` | `object` | `unknown` | `other`;
   local?: LocalVariableType;
   modelAttributes?: ModelAttributeType[];
   rootType: ResolvedTypeType;
   segmentTypes: ResolvedTypeType[];
+  segmentProperties: (TypePropertyType | undefined)[];
 }
 export interface SemanticAnalysisType {
   diagnostics: ExpressionIssueType[];
-  resolutions: Map<ExpressionNodeType, SemanticResolutionType>;
+  resolutions: Map<ExpressionChainType, SemanticResolutionType>;
 }
 
 // 서비스·프로바이더 타입 -------------------------------------------------------------

@@ -25,8 +25,8 @@ const STANDARD_ATTRIBUTES: DialectAttributeType[] = [
   { "name": `fragment`, "kind": `fragment-def`, "doc": `Declares a reusable fragment: th:fragment="name(param1, param2)".` },
   { "name": `remove`, "kind": `remove`, "doc": `Removes markup at render time: all, body, tag, all-but-first, or none.` },
   { "name": `inline`, "kind": `inline`, "doc": `Enables inlining mode for the element body: text, javascript, css, or none.` },
-  { "name": `assert`, "kind": `expression`, "doc": `Throws an exception unless every comma-separated expression evaluates to true.` },
-  { "name": `ref`, "kind": `expression`, "doc": `Declares a reference name usable in fragment selectors (ref=name).` },
+  { "name": `assert`, "kind": `assert`, "doc": `Throws an exception unless every comma-separated expression evaluates to true.` },
+  { "name": `ref`, "kind": `plain`, "doc": `Declares a reference name usable in fragment selectors (ref=name).` },
   { "name": `block`, "kind": `fixed`, "doc": `Synthetic container element: <th:block th:each=...>. Removed from the output.` },
   { "name": `alt-title`, "kind": `expression`, "doc": `Sets alt and title to the same value.` },
   { "name": `lang-xmllang`, "kind": `expression`, "doc": `Sets lang and xml:lang to the same value.` },
@@ -54,11 +54,11 @@ const HTML_ATTRIBUTE_NAMES = [
 
 // 3. Spring Security 다이얼렉트 --------------------------------------------------------
 const SECURITY_ATTRIBUTES: DialectAttributeType[] = [
-  { "name": `authorize`, "kind": `expression`, "doc": `Renders the element when the Spring Security expression allows it: sec:authorize="hasRole('ADMIN')".` },
-  { "name": `authorize-url`, "kind": `expression`, "doc": `Renders the element when the current user may access the given URL.` },
-  { "name": `authorize-acl`, "kind": `expression`, "doc": `Renders the element when the ACL expression grants access: sec:authorize-acl="\${obj} :: 'read'".` },
-  { "name": `authorize-expr`, "kind": `expression`, "doc": `Alias of sec:authorize.` },
-  { "name": `authentication`, "kind": `expression`, "doc": `Sets the element text to an Authentication property: sec:authentication="name".` },
+  { "name": `authorize`, "kind": `spel`, "doc": `Renders the element when the Spring Security expression allows it: sec:authorize="hasRole('ADMIN')".` },
+  { "name": `authorize-url`, "kind": `plain`, "doc": `Renders the element when the current user may access the given URL.` },
+  { "name": `authorize-acl`, "kind": `plain`, "doc": `Renders the element when the ACL expression grants access: sec:authorize-acl="\${obj} :: 'read'".` },
+  { "name": `authorize-expr`, "kind": `spel`, "doc": `Alias of sec:authorize.` },
+  { "name": `authentication`, "kind": `spel`, "doc": `Sets the element text to an Authentication property: sec:authentication="name".` },
 ];
 
 // 4. Layout 다이얼렉트 ------------------------------------------------------------------
@@ -69,7 +69,7 @@ const LAYOUT_ATTRIBUTES: DialectAttributeType[] = [
   { "name": `insert`, "kind": `fragment-ref`, "doc": `Inserts a fragment and allows child content to be passed in.` },
   { "name": `replace`, "kind": `fragment-ref`, "doc": `Replaces the element with a fragment and allows child content to be passed in.` },
   { "name": `include`, "kind": `fragment-ref`, "doc": `Legacy inclusion attribute.`, "deprecated": `Deprecated in Layout Dialect 2.0. Use layout:insert.` },
-  { "name": `title-pattern`, "kind": `expression`, "doc": `Combines layout and content titles: layout:title-pattern="$LAYOUT_TITLE - $CONTENT_TITLE".` },
+  { "name": `title-pattern`, "kind": `plain`, "doc": `Combines layout and content titles: layout:title-pattern="$LAYOUT_TITLE - $CONTENT_TITLE".` },
   { "name": `append`, "kind": `fixed`, "doc": `Appends the content element to the decorated element instead of replacing it.` },
   { "name": `prepend`, "kind": `fixed`, "doc": `Prepends the content element to the decorated element instead of replacing it.` },
 ];

@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <title th:text="${title}">Title</title>
+  <link rel="stylesheet" th:href="@{/robots.txt}">
 </head>
 <body>
   <main>
     <h1 th:text="#{home.welcome(${user.name})}">Welcome</h1>
     <ul>
       <li th:each="item, stat : ${items}" th:classappend="${stat.odd} ? 'odd' : 'even'">
-        <a th:href="@{/items/{id}(id=${item.id})}" th:text="${item.name}">item</a>
+        <a th:href="@{/items/{id}(id=${item.id})}" th:text="${item.name}" th:title="#{item.link}">item</a>
       </li>
     </ul>
     <p>Total: [[${#lists.size(items)}]]</p>

@@ -2,34 +2,47 @@
 
 Thymeleaf-Language-Support is a VS Code extension that adds Thymeleaf awareness to HTML templates without replacing
 the built-in HTML language mode. It keeps HTML completion, formatting, and Emmet intact and layers Thymeleaf syntax
-highlighting, template diagnostics, completion, hover documentation, fragment symbols, and fragment navigation on top.
+highlighting, an expression parser, Spring controller model validation, completion, hover, navigation, and fragment
+tooling on top.
 
 ## Features
 
 - Highlight `th:*`, `data-th-*`, `sec:*`, and `layout:*` attributes, and tokenize `${...}`, `*{...}`, `#{...}`,
   `@{...}`, `~{...}`, `|...|`, `__...__`, `[[...]]`, `[(...)]`, `/*[[...]]*/` in `th:inline="javascript"` blocks,
   parser-level comments `<!--/* */-->`, and prototype-only comments `<!--/*/ /*/-->` through an injection grammar.
-- Diagnose expression syntax: unclosed `${`, unclosed string literals, mismatched or unexpected brackets, empty
-  expressions, nested `${}` inside `${}`, unclosed `|...|`, and invalid message keys.
-- Diagnose attribute usage: unknown `th:*` names with a spelling suggestion, deprecated `th:include`,
-  `th:substituteby`, `layout:decorator`, duplicate attributes, missing or empty values, invalid `th:each`,
-  `th:inline`, `th:remove`, `th:fragment`, `th:with`, `th:attr`, and `th:object` forms, and unescaped `th:utext`.
-- Diagnose fragment references whose template file does not exist under the configured template roots.
-- Complete `th:`, `sec:`, `layout:`, and `data-th-` attribute names with documentation, and `#` utility objects
-  inside expressions.
-- Show hover documentation for dialect attributes and utility objects.
-- List `th:fragment` and `layout:fragment` definitions in the outline and symbol picker.
-- Jump from `th:insert`, `th:replace`, `th:include`, and `layout:decorate` references to the fragment template and
-  element through Go to Definition or the context menu command.
-- Insert Thymeleaf snippets (`th-html`, `th:text`, `th:each`, `th-each-block`, `th-switch`, `th:fragment`,
-  `th:replace`, `th-form`, `th-block`, `th-inline-js`, `th-comment`, `layout:decorate`, `sec:authorize`, and more).
+- Parse every attribute value with a Thymeleaf standard expression and SpEL subset grammar and report positioned
+  syntax errors: missing operators, unquoted text, dangling `.`, unmatched ternary, broken link parameters, and
+  missing fragment selectors, on top of bracket, string, and literal-substitution structure checks.
+- Index Spring controllers: `model.addAttribute`, `ModelAndView`, `@ModelAttribute` methods and parameters,
+  handler command objects, `@ControllerAdvice`, `@SessionAttributes`, flash and request attributes, and the view
+  names each handler returns. Infer the Java type of each attribute from literals, constructors, locals,
+  parameters, fields, and service method return types.
+- Index Java classes (fields, getters, Lombok `@Data`/`@Getter`/`@Value`, records, enums, inheritance) and
+  validate `${user.nmae}` style property chains, `th:each` element types, status variables, `th:with` locals,
+  `th:object` selections, and fragment parameters. Report model attributes that no mapped controller adds.
+- Validate `#{...}` keys and argument counts against `messages*.properties`, `@{...}` paths against controller
+  mappings and static resources, path variables against link parameters, and fragment names and arities against
+  the referenced template.
+- Complete attribute names, model attributes, Java properties and methods, utility objects, message keys,
+  controller URLs, static resources, template names, and fragment names.
+- Hover: attribute documentation, resolved Java type and declaring controller for model attributes, property
+  declaration site, message values per locale, matching handler for a URL, and fragment signatures.
+- Navigate: go to definition and find references for model attributes, Java properties, message keys, URLs,
+  static resources, and fragments. Document links open templates and static files directly.
+- Java side: CodeLens to open the returned template and to list template usages of each model attribute, a
+  diagnostic for view names without a template, go to definition from a view name to the template, references
+  from an attribute literal to its template usages, and view-name completion inside `return "..."`.
+- Signature help for fragment arguments and message placeholders.
+- Snippets (`th-html`, `th:text`, `th:each`, `th-each-block`, `th-switch`, `th:fragment`, `th:replace`, `th-form`,
+  `th-block`, `th-inline-js`, `th-comment`, `layout:decorate`, `sec:authorize`, and more).
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `Thymeleaf-Language-Support.validate` | Re-run diagnostics on the active HTML template and report the count. |
+| `Thymeleaf-Language-Support.validate` | Re-run diagnostics on the active HTML or Java document and report the count. |
 | `Thymeleaf-Language-Support.gotoFragment` | Open the fragment template referenced at the cursor. |
+| `Thymeleaf-Language-Support.rebuildIndex` | Rescan templates, Java sources, message bundles, and static resources. |
 | `Thymeleaf-Language-Support.openLogOutput` | Open the Thymeleaf-Language-Support output channel. |
 
 ## Settings
@@ -39,10 +52,18 @@ highlighting, template diagnostics, completion, hover documentation, fragment sy
 | `Thymeleaf-Language-Support.logLevel` | `info` | Controls extension logging: `off`, `debug`, `info`, `hint`, `warn`, `error`. |
 | `Thymeleaf-Language-Support.diagnosticsEnabled` | `true` | Enables template diagnostics. |
 | `Thymeleaf-Language-Support.disabledDiagnosticCodes` | `[]` | Diagnostic codes to suppress while diagnostics remain enabled. |
-| `Thymeleaf-Language-Support.languageFeaturesEnabled` | `true` | Enables completion, hover, symbols, and go-to-definition. |
+| `Thymeleaf-Language-Support.languageFeaturesEnabled` | `true` | Enables completion, hover, navigation, signature help, links, and symbols. |
+| `Thymeleaf-Language-Support.javaEnabled` | `true` | Indexes Java sources for model validation and Java-side features. |
+| `Thymeleaf-Language-Support.modelValidationEnabled` | `true` | Reports unknown model attributes and properties. |
+| `Thymeleaf-Language-Support.linkValidationEnabled` | `true` | Reports `@{...}` paths without a mapping or static resource. |
+| `Thymeleaf-Language-Support.messageValidationEnabled` | `true` | Reports unknown message keys and argument count mismatches. |
+| `Thymeleaf-Language-Support.codeLensEnabled` | `true` | Shows CodeLens in Java controllers. |
 | `Thymeleaf-Language-Support.additionalAttributes` | `[]` | Extra `th:*` names accepted without an unknown-attribute diagnostic. |
-| `Thymeleaf-Language-Support.templateGlobs` | `["**/templates/**"]` | Roots under which fragment template names are resolved. |
-| `Thymeleaf-Language-Support.searchExclude` | build dirs | Glob patterns excluded from template resolution. |
+| `Thymeleaf-Language-Support.templateGlobs` | `["**/templates/**"]` | Roots under which template names are resolved. |
+| `Thymeleaf-Language-Support.javaGlobs` | `["**/src/main/java/**/*.java"]` | Java sources to index. |
+| `Thymeleaf-Language-Support.messageGlobs` | messages, i18n | Message bundles to index. |
+| `Thymeleaf-Language-Support.staticGlobs` | Spring static roots | Static resource roots for `@{...}` validation. |
+| `Thymeleaf-Language-Support.searchExclude` | build dirs | Glob patterns excluded from scanning. |
 | `Thymeleaf-Language-Support.maxDocumentLength` | `300000` | Skips diagnostics above this document length. |
 
 ## Diagnostics
@@ -57,6 +78,7 @@ highlighting, template diagnostics, completion, hover documentation, fragment sy
 | `thymeleaf-nested-expression` | warning | `${}` nested inside `${}` or `*{}` outside preprocessing. |
 | `thymeleaf-unclosed-literal-substitution` | error | `|...|` is never closed. |
 | `thymeleaf-invalid-message-key` | warning | `#{...}` key is not a dotted identifier or expression. |
+| `thymeleaf-expression-syntax` | error | The expression parser rejected the value (message names the token and position). |
 | `thymeleaf-missing-value` | warning | A dialect attribute has no value. |
 | `thymeleaf-empty-value` | warning | A dialect attribute value is blank. |
 | `thymeleaf-unknown-attribute` | warning or information | Attribute name is not a known processor; warning when a close match exists. |
@@ -70,7 +92,21 @@ highlighting, template diagnostics, completion, hover documentation, fragment sy
 | `thymeleaf-object-expression` | warning | `th:object` is not a `${...}` expression. |
 | `thymeleaf-unescaped-text` | hint | `th:utext` renders unescaped HTML. |
 | `thymeleaf-unclosed-inline` | error | `[[` or `[(` is never closed. |
+| `thymeleaf-link-path-variable` | warning | `@{/x/{id}}` has no `id=` parameter. |
 | `thymeleaf-unknown-template` | warning | Referenced template file was not found. |
+| `thymeleaf-unknown-fragment` | warning | Referenced fragment name is not defined in the target template. |
+| `thymeleaf-fragment-arity` | warning | Fragment argument count or names do not match the signature. |
+| `thymeleaf-unknown-model-attribute` | warning | `${root}` is not added by any controller mapped to this template. |
+| `thymeleaf-unknown-property` | warning | Property or method does not exist on the inferred Java type. |
+| `thymeleaf-selection-without-object` | warning | `*{...}` used without an enclosing `th:object`. |
+| `thymeleaf-unknown-message-key` | warning | `#{key}` is missing from the indexed bundles. |
+| `thymeleaf-message-arity` | information | Fewer arguments than `{n}` placeholders. |
+| `thymeleaf-unknown-link` | information | `@{/path}` matches neither a mapping nor a static resource. |
+| `thymeleaf-missing-view` | warning | Java: returned view name has no template file. |
+
+Model validation only runs for templates that at least one indexed controller returns (directly or through a
+fragment include chain). Handlers that call `addAllAttributes`, `mergeAttributes`, or use non-literal attribute
+names mark the template as dynamic and suppress unknown-attribute reports while property checks stay active.
 
 ## Development
 
@@ -78,7 +114,7 @@ highlighting, template diagnostics, completion, hover documentation, fragment sy
 | --- | --- |
 | Install | `bun install` |
 | Type check and bundle | `bun run compile` |
-| Unit tests (model + grammar tokenization against the VS Code HTML grammar) | `bun test` |
+| Unit tests (parser, Java model, message model, semantic model, grammar tokenization) | `bun test` |
 | Editor e2e tests (launches VSCodium or VS Code with an isolated profile) | `bun run test:e2e` |
 | Package | `bun run package` |
 

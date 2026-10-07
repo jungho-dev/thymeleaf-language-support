@@ -67,7 +67,7 @@ describe(`dialect attributes`, () => {
     expect(hasScope(tokens, `th:`, `entity.other.attribute-name.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `text`, `entity.other.attribute-name.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `\${`, `punctuation.definition.template-expression.begin.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `user`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `user`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `name`, `variable.other.property.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `}`, `punctuation.definition.template-expression.end.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `>`, `punctuation.definition.tag.end.html`)).toBe(true);
@@ -80,7 +80,7 @@ describe(`dialect attributes`, () => {
     expect(hasScope(tokens, `class`, `entity.other.attribute-name.thymeleaf`)).toBe(false);
     expect(hasScope(tokens, `class`, `entity.other.attribute-name.html`)).toBe(true);
     expect(hasScope(tokens, `id`, `entity.other.attribute-name.html`)).toBe(true);
-    expect(hasScope(tokens, `c`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `c`, `variable.other.readwrite.thymeleaf`)).toBe(true);
   });
 
   test(`supports data-th-*, single quotes, sec:, and layout: prefixes`, () => {
@@ -89,8 +89,18 @@ describe(`dialect attributes`, () => {
     expect(hasScope(tokens, `data-th-`, `entity.other.attribute-name.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `sec:`, `entity.other.attribute-name.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `layout:`, `entity.other.attribute-name.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `a`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `a`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `layouts/main`, `entity.name.fragment.thymeleaf`)).toBe(true);
+  });
+
+  test(`keeps hyphenated tokens whole and quotes inside the string scope`, () => {
+    const [tokens] = tokenize([`<div th:class="col-md-6" th:ref="title-ref-1" th:text="true">`]);
+
+    expect(hasScope(tokens, `col-md-6`, `string.unquoted.token.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `title-ref-1`, `string.unquoted.token.thymeleaf`)).toBe(true);
+    expect(tokens.some((token) => token.scopes.includes(`constant.numeric.thymeleaf`))).toBe(false);
+    expect(hasScope(tokens, `true`, `constant.language.thymeleaf`)).toBe(true);
+    expect(tokens.filter((token) => token.text === `"`).every((token) => token.scopes.includes(`string.quoted.double.html`))).toBe(true);
   });
 
   test(`does not claim unrelated namespaced attributes`, () => {
@@ -108,7 +118,7 @@ describe(`expression kinds`, () => {
     expect(hasScope(tokens, `/users/`, `string.other.link.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `{id}`, `variable.other.path-variable.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `id`, `variable.parameter.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `u`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `u`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `>`, `punctuation.definition.tag.end.html`)).toBe(true);
   });
 
@@ -116,7 +126,7 @@ describe(`expression kinds`, () => {
     const [tokens] = tokenize([`<p th:text="#{home.welcome(\${name})}">`]);
 
     expect(hasScope(tokens, `home.welcome`, `support.constant.message-key.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `name`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `name`, `variable.other.readwrite.thymeleaf`)).toBe(true);
   });
 
   test(`fragment expression with selector operator`, () => {
@@ -157,7 +167,7 @@ describe(`inline and comments`, () => {
     expect(hasScope(tokens, `[[`, `punctuation.definition.template-expression.begin.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `]]`, `punctuation.definition.template-expression.end.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `[(`, `punctuation.definition.template-expression.begin.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `raw`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `raw`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `</`, `punctuation.definition.tag.begin.html`)).toBe(true);
   });
 
@@ -165,7 +175,7 @@ describe(`inline and comments`, () => {
     const [, tokens] = tokenize([`<script th:inline="javascript">`, `var x = /*[[\${x}]]*/ 'y';`]);
 
     expect(hasScope(tokens, `[[`, `punctuation.definition.template-expression.begin.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `x`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `x`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `*/`, `comment.block.js`)).toBe(true);
     expect(hasScope(tokens, ` 'y';`, `source.js`)).toBe(true);
   });
@@ -175,9 +185,9 @@ describe(`inline and comments`, () => {
     const [protoTokens] = tokenize([`<!--/*/ <p th:text="\${a}"></p> /*/-->`]);
 
     expect(hasScope(parserTokens, `<!--/*`, `comment.block.parser-level.thymeleaf`)).toBe(true);
-    expect(parserTokens.some((token) => token.text === `a` && token.scopes.includes(`variable.other.thymeleaf`))).toBe(false);
+    expect(parserTokens.some((token) => token.text === `a` && token.scopes.includes(`variable.other.readwrite.thymeleaf`))).toBe(false);
     expect(hasScope(parserTokens, `b`, `entity.name.tag.html`)).toBe(true);
-    expect(hasScope(protoTokens, `a`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(protoTokens, `a`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(protoTokens, `/*/-->`, `punctuation.definition.comment.prototype-only.thymeleaf`)).toBe(true);
   });
 
@@ -185,7 +195,7 @@ describe(`inline and comments`, () => {
     const [tokens] = tokenize([`<!-- <p th:text="\${a}"></p> -->`]);
 
     expect(tokens.every((token) => token.scopes.includes(`comment.block.html`))).toBe(true);
-    expect(tokens.some((token) => token.scopes.includes(`variable.other.thymeleaf`))).toBe(false);
+    expect(tokens.some((token) => token.scopes.includes(`variable.other.readwrite.thymeleaf`))).toBe(false);
   });
 });
 
@@ -194,8 +204,8 @@ describe(`multi-line state`, () => {
   test(`attribute value spanning lines resumes and terminates`, () => {
     const [first, second, third] = tokenize([`<div th:text="\${a}`, `  + \${b}"`, `  class="c">`]);
 
-    expect(hasScope(first, `a`, `variable.other.thymeleaf`)).toBe(true);
-    expect(hasScope(second, `b`, `variable.other.thymeleaf`)).toBe(true);
+    expect(hasScope(first, `a`, `variable.other.readwrite.thymeleaf`)).toBe(true);
+    expect(hasScope(second, `b`, `variable.other.readwrite.thymeleaf`)).toBe(true);
     expect(hasScope(second, `"`, `punctuation.definition.string.end.html`)).toBe(true);
     expect(hasScope(third, `class`, `entity.other.attribute-name.html`)).toBe(true);
     expect(hasScope(third, `>`, `punctuation.definition.tag.end.html`)).toBe(true);

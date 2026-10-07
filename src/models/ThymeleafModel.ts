@@ -1,7 +1,8 @@
 // models/ThymeleafModel.ts
 
 import { findDialectAttribute, isPassthroughAttribute, listStandardAttributeNames } from "@exportData";
-import type { AnalysisOptionsType, DialectPrefixType, ExpressionIssueType, FragmentReferenceType, TemplateAnalysisType, TemplateAttributeType, TemplateDiagnosticType, TemplateFragmentType, TemplateInlineType, TemplateModelType, TextPositionType } from "@exportTypes";
+import { emptyParsedValue, parseAttributeValue } from "@models/ExpressionParser";
+import type { AnalysisOptionsType, AttributeKindType, DialectPrefixType, ExpressionIssueType, FragmentReferenceType, ScopeType, TemplateAnalysisType, TemplateAttributeType, TemplateDiagnosticType, TemplateElementType, TemplateFragmentType, TemplateInlineType, TemplateModelType, TextPositionType } from "@exportTypes";
 
 const TAG_NAME_PATTERN = /[A-Za-z][\w:.-]*/y;
 const ATTR_NAME_PATTERN = /[^\s"'<>/=]+/y;
@@ -16,6 +17,7 @@ const EXPRESSION_START_PATTERN = /[$*#@~]\{/;
 const MESSAGE_KEY_PATTERN = /^[\w.-]+$/;
 const INLINE_VALUES: ReadonlySet<string> = new Set([`text`, `javascript`, `css`, `none`]);
 const REMOVE_VALUES: ReadonlySet<string> = new Set([`all`, `body`, `tag`, `all-but-first`, `none`]);
+const VOID_TAGS: ReadonlySet<string> = new Set([`area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `param`, `source`, `track`, `wbr`]);
 const CLOSER_MAP: Readonly<Record<string, string>> = { ")": `(`, "]": `[`, "}": `{` };
 const MAX_SUGGEST_DISTANCE = 2;
 
@@ -29,7 +31,7 @@ interface BracketFrameType {
 export const buildLineStarts = (text: string): number[] => {
   const lineStarts = [0];
   for (let i = 0; i < text.length; i++) {
-    text.charCodeAt(i) === 10 && lineStarts.push(i + 1);
+    text.codePointAt(i) === 10 && lineStarts.push(i + 1);
   }
   return lineStarts;
 };
@@ -50,8 +52,26 @@ export const offsetToPosition = (lineStarts: number[], offset: number): TextPosi
   return { "line": low, "column": offset - lineStarts[low] };
 };
 
-// 3. 인라인 표현식 스캔 ----------------------------------------------------------------
-const scanInlines = (text: string, start: number, end: number, scriptMode: boolean, inlines: TemplateInlineType[]): void => {
+// 3. 템플릿 경로 -> 템플릿명 (templateGlobs 의 마지막 고정 세그먼트 기준) ---------------------------
+export const templateNameFromPath = (fsPath: string, templateGlobs: string[]): string | undefined => {
+  const normalized = fsPath.replaceAll(`\\`, `/`);
+  for (const glob of templateGlobs) {
+    const segments = glob.split(`/`).filter((segment) => segment !== `` && !segment.includes(`*`));
+    const marker = segments.at(-1);
+    if (!marker) {
+      continue;
+    }
+    const index = normalized.lastIndexOf(`/${marker}/`);
+    if (index < 0) {
+      continue;
+    }
+    return normalized.slice(index + marker.length + 2).replace(/\.html?$/i, ``);
+  }
+  return undefined;
+};
+
+// 4. 인라인 표현식 스캔 ----------------------------------------------------------------
+const scanInlines = (text: string, start: number, end: number, scriptMode: boolean, elementIndex: number, inlines: TemplateInlineType[]): void => {
   let cursor = start;
   while (cursor < end) {
     const escapedAt = text.indexOf(`[[`, cursor);
@@ -64,16 +84,19 @@ const scanInlines = (text: string, start: number, end: number, scriptMode: boole
     const kind = openAt === escapedAt ? `escaped` : `unescaped`;
     const closer = kind === `escaped` ? `]]` : `)]`;
     const closeAt = text.indexOf(closer, openAt + 2);
-    if (closeAt < 0 || closeAt >= end) {
-      inlines.push({ "kind": kind, "content": text.slice(openAt + 2, end), "offset": openAt, "length": end - openAt, "closed": false, "scriptMode": scriptMode });
+    const closed = closeAt >= 0 && closeAt < end;
+    const content = closed ? text.slice(openAt + 2, closeAt) : text.slice(openAt + 2, end);
+    const shouldParse = closed && (!scriptMode || EXPRESSION_START_PATTERN.test(content));
+    const parsed = shouldParse ? parseAttributeValue(content, `expression`, openAt + 2) : emptyParsedValue();
+    inlines.push({ "kind": kind, "content": content, "offset": openAt, "length": closed ? closeAt + 2 - openAt : end - openAt, "closed": closed, "scriptMode": scriptMode, "elementIndex": elementIndex, "parsed": parsed });
+    if (!closed) {
       return;
     }
-    inlines.push({ "kind": kind, "content": text.slice(openAt + 2, closeAt), "offset": openAt, "length": closeAt + 2 - openAt, "closed": true, "scriptMode": scriptMode });
     cursor = closeAt + 2;
   }
 };
 
-// 4. 공백 건너뛰기 -------------------------------------------------------------------
+// 5. 공백 건너뛰기 -------------------------------------------------------------------
 const skipWhitespace = (text: string, cursor: number): number => {
   let next = cursor;
   while (next < text.length && /\s/.test(text[next])) {
@@ -82,35 +105,48 @@ const skipWhitespace = (text: string, cursor: number): number => {
   return next;
 };
 
-// 5. 프래그먼트 정의 파싱 ---------------------------------------------------------------
+// 6. 속성 종류 결정 --------------------------------------------------------------------
+const resolveKind = (prefix: DialectPrefixType, name: string): AttributeKindType => {
+  const definition = findDialectAttribute(prefix, name);
+  if (definition) {
+    return definition.kind;
+  }
+  return prefix === `th` ? `expression` : `plain`;
+};
+
+// 7. 프래그먼트 정의 파싱 ---------------------------------------------------------------
 const toFragment = (attribute: TemplateAttributeType): TemplateFragmentType | undefined => {
   const matched = FRAGMENT_DEF_PATTERN.exec(attribute.value);
   if (!matched) {
     return undefined;
   }
   const params = (matched[2] ?? ``).split(`,`).map((param) => param.trim()).filter((param) => param.length > 0);
-  return { "name": matched[1], "params": params, "prefix": attribute.prefix, "tag": attribute.tag, "offset": attribute.tagOffset, "length": attribute.valueOffset + attribute.value.length + 1 - attribute.tagOffset };
+  return { "name": matched[1], "params": params, "prefix": attribute.prefix, "tag": attribute.tag, "offset": attribute.tagOffset, "length": attribute.valueOffset + attribute.value.length + 1 - attribute.tagOffset, "elementIndex": attribute.elementIndex };
 };
 
-// 6. 템플릿 파싱 (요소·속성·인라인·프래그먼트) ------------------------------------------------
+// 8. 템플릿 파싱 (요소 트리·속성·인라인·프래그먼트) ------------------------------------------------
 export const parseTemplate = (text: string): TemplateModelType => {
   const attributes: TemplateAttributeType[] = [];
   const inlines: TemplateInlineType[] = [];
   const fragments: TemplateFragmentType[] = [];
+  const elements: TemplateElementType[] = [];
+  const tagNames = new Set<string>();
+  const ids = new Set<string>();
+  const openStack: TemplateElementType[] = [];
   let hasNamespace = false;
-  let elementIndex = 0;
   let cursor = 0;
   const length = text.length;
+  const currentParent = (): number => openStack.at(-1)?.index ?? -1;
 
   while (cursor < length) {
     const lt = text.indexOf(`<`, cursor);
     if (lt < 0) {
-      scanInlines(text, cursor, length, false, inlines);
+      scanInlines(text, cursor, length, false, currentParent(), inlines);
       break;
     }
-    scanInlines(text, cursor, lt, false, inlines);
+    scanInlines(text, cursor, lt, false, currentParent(), inlines);
 
-    // 주석·선언·닫는 태그
+    // 주석·선언
     if (text.startsWith(`<!--`, lt)) {
       if (text.startsWith(`<!--/*/`, lt)) {
         cursor = lt + 7;
@@ -125,9 +161,22 @@ export const parseTemplate = (text: string): TemplateModelType => {
       cursor = end < 0 ? length : end + 3;
       continue;
     }
-    if (text[lt + 1] === `!` || text[lt + 1] === `?` || text[lt + 1] === `/`) {
+    if (text[lt + 1] === `!` || text[lt + 1] === `?`) {
       const end = text.indexOf(`>`, lt);
       cursor = end < 0 ? length : end + 1;
+      continue;
+    }
+
+    // 닫는 태그: 가장 가까운 동일 태그까지 pop
+    if (text[lt + 1] === `/`) {
+      TAG_NAME_PATTERN.lastIndex = lt + 2;
+      const closingName = TAG_NAME_PATTERN.exec(text)?.[0].toLowerCase();
+      const end = text.indexOf(`>`, lt);
+      cursor = end < 0 ? length : end + 1;
+      if (closingName) {
+        const matchIndex = openStack.findLastIndex((element) => element.tag.toLowerCase() === closingName);
+        matchIndex >= 0 && openStack.splice(matchIndex);
+      }
       continue;
     }
 
@@ -139,7 +188,9 @@ export const parseTemplate = (text: string): TemplateModelType => {
       continue;
     }
     const tag = tagMatch[0];
-    const elementAttrs: TemplateAttributeType[] = [];
+    const element: TemplateElementType = { "index": elements.length, "tag": tag, "offset": lt, "parent": currentParent(), "attributes": [] };
+    elements.push(element);
+    tagNames.add(tag.toLowerCase());
     let pointer = lt + 1 + tag.length;
     let selfClosing = false;
     let closed = false;
@@ -198,21 +249,27 @@ export const parseTemplate = (text: string): TemplateModelType => {
           pointer += unquoted.length;
         }
       }
-      if (attrName.toLowerCase() === `xmlns:th`) {
+      const lowerName = attrName.toLowerCase();
+      if (lowerName === `xmlns:th`) {
         hasNamespace = true;
+      }
+      if (lowerName === `id` && value !== ``) {
+        element.id = value;
+        ids.add(value);
       }
       const dialectMatch = DIALECT_ATTR_PATTERN.exec(attrName);
       if (dialectMatch) {
         const prefix = (dialectMatch[1] ?? dialectMatch[2]) as DialectPrefixType;
-        elementAttrs.push({ "prefix": prefix, "name": dialectMatch[3], "raw": attrName, "value": value, "hasValue": valueOffset >= 0, "nameOffset": nameOffset, "valueOffset": valueOffset, "quote": quote, "tag": tag, "tagOffset": lt, "elementIndex": elementIndex });
+        const kind = resolveKind(prefix, dialectMatch[3]);
+        const parsed = valueOffset >= 0 ? parseAttributeValue(value, kind, valueOffset) : emptyParsedValue();
+        element.attributes.push({ "prefix": prefix, "name": dialectMatch[3], "raw": attrName, "value": value, "hasValue": valueOffset >= 0, "nameOffset": nameOffset, "valueOffset": valueOffset, "quote": quote, "tag": tag, "tagOffset": lt, "elementIndex": element.index, "kind": kind, "parsed": parsed });
       }
       if (unclosedQuote) {
         break;
       }
     }
-    elementIndex++;
-    attributes.push(...elementAttrs);
-    for (const attribute of elementAttrs) {
+    attributes.push(...element.attributes);
+    for (const attribute of element.attributes) {
       if (attribute.name === `fragment` && (attribute.prefix === `th` || attribute.prefix === `layout`)) {
         const fragment = toFragment(attribute);
         fragment && fragments.push(fragment);
@@ -227,16 +284,54 @@ export const parseTemplate = (text: string): TemplateModelType => {
       closePattern.lastIndex = pointer;
       const closeMatch = closePattern.exec(text);
       const contentEnd = closeMatch ? closeMatch.index : length;
-      const inlineMode = elementAttrs.find((attribute) => attribute.prefix === `th` && attribute.name === `inline`)?.value.trim().toLowerCase();
-      (inlineMode === `javascript` || inlineMode === `css`) && scanInlines(text, pointer, contentEnd, true, inlines);
+      const inlineMode = element.attributes.find((attribute) => attribute.prefix === `th` && attribute.name === `inline`)?.value.trim().toLowerCase();
+      (inlineMode === `javascript` || inlineMode === `css`) && scanInlines(text, pointer, contentEnd, true, element.index, inlines);
       cursor = contentEnd;
+      continue;
+    }
+    if (!selfClosing && !VOID_TAGS.has(lowerTag)) {
+      openStack.push(element);
     }
   }
 
-  return { "attributes": attributes, "inlines": inlines, "fragments": fragments, "hasNamespace": hasNamespace, "isThymeleaf": hasNamespace || attributes.length > 0 };
+  return { "attributes": attributes, "inlines": inlines, "fragments": fragments, "elements": elements, "tagNames": tagNames, "ids": ids, "hasNamespace": hasNamespace, "isThymeleaf": hasNamespace || attributes.length > 0 };
 };
 
-// 7. 표현식 구문 검사 -------------------------------------------------------------------
+// 9. 요소별 스코프 (th:each·th:with·fragment 파라미터·th:object 상속) ----------------------------
+export const buildScopes = (template: TemplateModelType): Map<number, ScopeType> => {
+  const scopes = new Map<number, ScopeType>();
+  for (const element of template.elements) {
+    const parentScope = element.parent >= 0 ? scopes.get(element.parent) : undefined;
+    const scope: ScopeType = { "locals": new Map(parentScope?.locals ?? []), "objectAttribute": parentScope?.objectAttribute, "insideFragment": parentScope?.insideFragment ?? false };
+    for (const attribute of element.attributes) {
+      if (attribute.prefix === `th` && attribute.name === `each`) {
+        const [item, stat] = attribute.parsed.eachVars;
+        item && scope.locals.set(item, { "name": item, "kind": `each`, "attribute": attribute, "expression": attribute.parsed.eachIterable });
+        for (const statName of [stat, item ? `${item}Stat` : undefined]) {
+          statName && scope.locals.set(statName, { "name": statName, "kind": `stat`, "attribute": attribute, "expression": attribute.parsed.eachIterable });
+        }
+      }
+      else if (attribute.prefix === `th` && attribute.name === `with`) {
+        for (const assignment of attribute.parsed.assignments) {
+          scope.locals.set(assignment.name, { "name": assignment.name, "kind": `with`, "attribute": attribute, "expression": assignment.expression });
+        }
+      }
+      else if (attribute.name === `fragment` && (attribute.prefix === `th` || attribute.prefix === `layout`)) {
+        scope.insideFragment = true;
+        for (const param of attribute.parsed.fragmentParams) {
+          scope.locals.set(param, { "name": param, "kind": `fragment-param`, "attribute": attribute });
+        }
+      }
+      else if (attribute.prefix === `th` && attribute.name === `object`) {
+        scope.objectAttribute = attribute;
+      }
+    }
+    scopes.set(element.index, scope);
+  }
+  return scopes;
+};
+
+// 10. 표현식 괄호·문자열 구조 검사 ---------------------------------------------------------------
 export const checkExpression = (value: string): ExpressionIssueType[] => {
   const issues: ExpressionIssueType[] = [];
   const stack: BracketFrameType[] = [];
@@ -261,6 +356,10 @@ export const checkExpression = (value: string): ExpressionIssueType[] => {
           continue;
         }
         if (value[end] === `'`) {
+          if (value[end + 1] === `'`) {
+            end += 2;
+            continue;
+          }
           closedString = true;
           break;
         }
@@ -362,7 +461,7 @@ export const checkExpression = (value: string): ExpressionIssueType[] => {
   return issues;
 };
 
-// 8. 프래그먼트 참조 파싱 ---------------------------------------------------------------
+// 11. 프래그먼트 참조 파싱 --------------------------------------------------------------
 export const parseFragmentReference = (value: string): FragmentReferenceType | undefined => {
   const trimmed = value.trim();
   if (trimmed === ``) {
@@ -377,7 +476,7 @@ export const parseFragmentReference = (value: string): FragmentReferenceType | u
   return { "template": template, "selector": (matched[2] ?? ``).trim(), "dynamic": dynamic };
 };
 
-// 9. 레벤슈타인 거리 -------------------------------------------------------------------
+// 12. 레벤슈타인 거리 ------------------------------------------------------------------
 const measureDistance = (left: string, right: string): number => {
   const rows = left.length + 1;
   const cols = right.length + 1;
@@ -393,7 +492,7 @@ const measureDistance = (left: string, right: string): number => {
   return previous[cols - 1];
 };
 
-// 10. 속성명 교정 제안 -----------------------------------------------------------------
+// 13. 속성명 교정 제안 ----------------------------------------------------------------
 export const suggestAttributeName = (name: string): string | undefined => {
   if (name.length < 3) {
     return undefined;
@@ -410,10 +509,11 @@ export const suggestAttributeName = (name: string): string | undefined => {
   return bestDistance <= MAX_SUGGEST_DISTANCE ? best : undefined;
 };
 
-// 11. 오프셋 위치의 다이얼렉트 속성 탐색 ---------------------------------------------------
+// 14. 오프셋 위치의 다이얼렉트 속성·인라인 탐색 --------------------------------------------------
 export const findAttributeAt = (template: TemplateModelType, offset: number): TemplateAttributeType | undefined => template.attributes.find((attribute) => offset >= attribute.nameOffset && offset <= (attribute.hasValue ? attribute.valueOffset + attribute.value.length + 1 : attribute.nameOffset + attribute.raw.length));
+export const findInlineAt = (template: TemplateModelType, offset: number): TemplateInlineType | undefined => template.inlines.find((inline) => offset >= inline.offset && offset <= inline.offset + inline.length);
 
-// 12. 템플릿 분석 (파싱 + 진단) ----------------------------------------------------------
+// 15. 템플릿 분석 (파싱 + 구문 진단) ------------------------------------------------------
 export const analyzeTemplate = (text: string, options: AnalysisOptionsType = {}): TemplateAnalysisType => {
   const template = parseTemplate(text);
   const diagnostics: TemplateDiagnosticType[] = [];
@@ -462,13 +562,30 @@ export const analyzeTemplate = (text: string, options: AnalysisOptionsType = {})
     }
     definition?.deprecated && pushAt(attribute.nameOffset, attribute.raw.length, `thymeleaf-deprecated-attribute`, `'${label}' is deprecated. ${definition.deprecated}`, `warning`);
 
-    // 표현식 구문
-    for (const issue of checkExpression(attribute.value)) {
+    // 표현식 구조·구문
+    const structural = attribute.kind === `plain` ? [] : checkExpression(attribute.value);
+    for (const issue of structural) {
       push({ ...issue, "offset": attribute.valueOffset + issue.offset });
+    }
+    if (structural.length === 0) {
+      for (const issue of attribute.parsed.errors) {
+        push(issue);
+      }
+    }
+
+    // 링크 경로 변수 누락
+    for (const node of attribute.parsed.expressions) {
+      if (node.kind !== `link` || !node.path || node.path.dynamic) {
+        continue;
+      }
+      const provided = new Set(node.args.map((arg) => arg.name));
+      for (const variable of node.pathVariables) {
+        provided.has(variable) || pushAt(node.offset, node.length, `thymeleaf-link-path-variable`, `Path variable '{${variable}}' has no matching parameter (${variable}=...).`, `warning`);
+      }
     }
 
     // 종류별 검증
-    const kind = definition?.kind;
+    const kind = attribute.kind;
     const trimmed = attribute.value.trim();
     const hasExpression = EXPRESSION_START_PATTERN.test(trimmed);
     if (kind === `each` && !EACH_PATTERN.test(attribute.value)) {
@@ -504,8 +621,14 @@ export const analyzeTemplate = (text: string, options: AnalysisOptionsType = {})
     if (inline.scriptMode && !EXPRESSION_START_PATTERN.test(inline.content)) {
       continue;
     }
-    for (const issue of checkExpression(inline.content)) {
+    const structural = checkExpression(inline.content);
+    for (const issue of structural) {
       push({ ...issue, "offset": inline.offset + 2 + issue.offset });
+    }
+    if (structural.length === 0) {
+      for (const issue of inline.parsed.errors) {
+        push(issue);
+      }
     }
   }
 

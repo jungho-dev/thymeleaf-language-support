@@ -19,16 +19,16 @@ const OUTPUT = path.resolve(import.meta.dir, `..`, `logo.png`);
 const CRC_TABLE = Array.from({ "length": 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit++) {
-    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    value = value & 1 ? 0xed_b8_83_20 ^ (value >>> 1) : value >>> 1;
   }
   return value >>> 0;
 });
 const crc32 = (bytes: Uint8Array): number => {
-  let crc = 0xffffffff;
+  let crc = 0xff_ff_ff_ff;
   for (const byte of bytes) {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
-  return (crc ^ 0xffffffff) >>> 0;
+  return (crc ^ 0xff_ff_ff_ff) >>> 0;
 };
 
 // 2. PNG 청크 -------------------------------------------------------------------------------
