@@ -119,10 +119,18 @@ class ExpressionScanner {
     }
   }
   parseConditional(stops: string): void {
+    let operandStart = this.nodes.length;
     this.parseOr(stops);
     while (true) {
       this.skipWs();
       if (this.consume(`?:`)) {
+        // elvis 좌항
+        for (const node of this.nodes.slice(operandStart)) {
+          node.chains.forEach((chain) => {
+            chain.guarded = true;
+          });
+        }
+        operandStart = this.nodes.length;
         this.parseOr(stops);
         continue;
       }
@@ -533,10 +541,16 @@ class ExpressionScanner {
     }
   }
   parseSpelTernary(stops: string, node: ExpressionNodeType): void {
+    let operandStart = node.chains.length;
     this.parseSpelOr(stops, node);
     while (true) {
       this.skipWs();
       if (this.consume(`?:`)) {
+        // elvis 좌항
+        node.chains.slice(operandStart).forEach((chain) => {
+          chain.guarded = true;
+        });
+        operandStart = node.chains.length;
         this.parseSpelOr(stops, node);
         continue;
       }
@@ -837,6 +851,7 @@ const shiftNode = (node: ExpressionNodeType, delta: number): ExpressionNodeType 
   "innerOffset": node.innerOffset + delta,
   "argsOffset": node.argsOffset < 0 ? -1 : node.argsOffset + delta,
   "chains": node.chains.map((chain) => ({
+    ...chain,
     "root": { ...chain.root, "offset": chain.root.offset + delta },
     "segments": chain.segments.map((segment) => ({ ...segment, "offset": segment.offset + delta })),
   })),

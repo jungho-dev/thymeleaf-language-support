@@ -49,6 +49,7 @@ export interface ExpressionArgType {
 export interface ExpressionChainType {
   root: ChainRootType;
   segments: ChainSegmentType[];
+  guarded?: boolean;
 }
 export interface ExpressionNodeType {
   kind: ExpressionKindType;
@@ -131,6 +132,7 @@ export interface TemplateModelType {
   elements: TemplateElementType[];
   tagNames: Set<string>;
   ids: Set<string>;
+  refs: Set<string>;
   hasNamespace: boolean;
   isThymeleaf: boolean;
 }
@@ -265,7 +267,9 @@ export interface JavaTypeType {
   bodyStart: number;
   bodyEnd: number;
   isController: boolean;
+  isRestController: boolean;
   isControllerAdvice: boolean;
+  isInterceptor: boolean;
   classPaths: string[];
   sessionAttributes: string[];
   handlers: JavaHandlerType[];
@@ -326,6 +330,7 @@ export interface FragmentCatalogType {
   fragments: TemplateFragmentType[];
   tagNames: Set<string>;
   ids: Set<string>;
+  refs: Set<string>;
 }
 export interface SemanticIndexType {
   modelContextFor: (templateName: string | undefined) => ModelContextType;

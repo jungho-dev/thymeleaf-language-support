@@ -198,14 +198,15 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
     return item;
   });
   const fragmentItems = (templateName: string | undefined, located: LocateResultType, range: vscode.Range): vscode.CompletionItem[] => {
-    const catalog = !templateName || templateName === `this` ? { "fragments": located.template.fragments } : semanticIndex.fragmentCatalog(templateName);
-    return (catalog?.fragments ?? []).map((fragment) => {
+    const catalog = !templateName || templateName === `this` ? { "fragments": located.template.fragments, "refs": located.template.refs } : semanticIndex.fragmentCatalog(templateName);
+    const items = (catalog?.fragments ?? []).map((fragment) => {
       const item = new vscode.CompletionItem(fragment.name, vscode.CompletionItemKind.Function);
       item.detail = `${fragment.prefix}:fragment on <${fragment.tag}>${fragment.params.length > 0 ? ` (${fragment.params.join(`, `)})` : ``}`;
       item.insertText = fragment.params.length > 0 ? new vscode.SnippetString(`${fragment.name}(${fragment.params.map((param, index) => `\${${index + 1}:${param}}`).join(`, `)})`) : fragment.name;
       item.range = range;
       return item;
     });
+    return [...items, ...simpleItems([...catalog?.refs ?? []], vscode.CompletionItemKind.Reference, `th:ref marker`, range)];
   };
 
   // 2-2. 완성 프로바이더
@@ -265,10 +266,11 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
       }
       if (opener?.kind === `message` && !opener.tail.includes(`(`)) {
         const word = /[\w.-]*$/.exec(opener.tail)?.[0] ?? ``;
-        return messageIndex.listEntries().filter((entry, index, all) => all.findIndex((candidate) => candidate.key === entry.key) === index).map((entry) => {
-          const item = new vscode.CompletionItem(entry.key, vscode.CompletionItemKind.Text);
-          item.detail = entry.value;
-          item.documentation = new vscode.MarkdownString(messageIndex.findMessages(entry.key).map((candidate) => `- **${candidate.locale}**: ${candidate.value}`).join(`\n`));
+        return messageIndex.listKeys().map((key) => {
+          const entries = messageIndex.findMessages(key);
+          const item = new vscode.CompletionItem(key, vscode.CompletionItemKind.Text);
+          item.detail = entries[0]?.value;
+          item.documentation = new vscode.MarkdownString(entries.map((candidate) => `- **${candidate.locale}**: ${candidate.value}`).join(`\n`));
           item.range = wordRange(word);
           return item;
         });
@@ -485,8 +487,11 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
         attribute.fsPath !== `` && locations.push(toLocation(attribute.fsPath, attribute.line, attribute.column, attribute.length));
       }
       const seen = new Set<string>();
+      const documents = new Map<string, vscode.TextDocument>();
       for (const usage of templateIndex.attributeUsages(name)) {
-        const target = await vscode.workspace.openTextDocument(usage.uri);
+        const documentKey = usage.uri.toString();
+        const target = documents.get(documentKey) ?? await vscode.workspace.openTextDocument(usage.uri);
+        documents.set(documentKey, target);
         const key = `${usage.uri.toString()}:${usage.offset}`;
         if (!seen.has(key)) {
           seen.add(key);

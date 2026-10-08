@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { analyzeTemplate, checkExpression, findAttributeAt, offsetToPosition, buildLineStarts, parseFragmentReference, parseTemplate, suggestAttributeName } from "./ThymeleafModel";
+import { analyzeTemplate, checkExpression, findAttributeAt, matchesGlob, offsetToPosition, buildLineStarts, parseFragmentReference, parseTemplate, suggestAttributeName } from "./ThymeleafModel";
 
 const codesOf = (html: string): string[] => analyzeTemplate(html).diagnostics.map((item) => item.code);
 
@@ -51,6 +51,23 @@ describe(`parseTemplate`, () => {
 
   test(`returns isThymeleaf=false for plain HTML`, () => {
     expect(parseTemplate(`<div class="x">[[not thymeleaf]]</div>`).isThymeleaf).toBe(false);
+  });
+});
+
+// 1-1. th:ref·글롭 ------------------------------------------------------------
+describe(`refs and globs`, () => {
+  test(`collects th:ref markers`, () => {
+    expect([...parseTemplate(`<th:block th:ref="title-ref-1"></th:block><b data-th-ref="x"></b><i th:ref=""></i>`).refs]).toEqual([`title-ref-1`, `x`]);
+  });
+
+  test(`matches workspace-relative globs`, () => {
+    expect(matchesGlob(`bin/main/templates/a.html`, [`**/bin/**`])).toBe(true);
+    expect(matchesGlob(`app/build/resources/main/templates/a.html`, [`**/build/**`])).toBe(true);
+    expect(matchesGlob(`src/main/resources/templates/a.html`, [`**/build/**`, `**/bin/**`])).toBe(false);
+    expect(matchesGlob(`src\\main\\java\\a\\B.java`, [`**/src/main/java/**/*.java`])).toBe(true);
+    expect(matchesGlob(`src/test/java/a/B.java`, [`**/src/main/java/**/*.java`])).toBe(false);
+    expect(matchesGlob(`src/main/resources/i18n/messages_ko.properties`, [`**/src/main/resources/**/messages*.properties`])).toBe(true);
+    expect(matchesGlob(`src/main/resources/static/a.css`, [`**/src/main/resources/{static,public}/**`])).toBe(true);
   });
 });
 

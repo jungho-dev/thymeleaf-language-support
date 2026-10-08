@@ -24,3 +24,21 @@
   template names, and fragment names.
 - Highlighting: attribute quotes keep the string scope, root identifiers use `variable.other.readwrite`,
   hyphenated tokens are no longer split by numeric highlighting.
+
+## \[ Unreleased \]
+
+- Icon: replaced the generated leaf with the official Thymeleaf logo; README gains requirements, installation, and
+  quick start sections.
+- Fragments: `th:ref` markers resolve as fragment selectors (`~{:: name}`) in diagnostics, completion, and
+  navigation; named arguments to a fragment without a signature are accepted as fragment-local variables.
+- Model validation: roots on the left of an elvis `?:` or followed by `?.` no longer report an unknown model
+  attribute.
+- Java: `@RestController` and `@ResponseBody` handlers index their URL paths without view names; array mapping
+  values whose strings contain braces (`value={"/page/{group}"}`) parse correctly; only literal or
+  conditional-literal returns count as view names.
+- Indexing: watchers honor `searchExclude` and the configured globs, and build-output template copies
+  (`bin/`, `build/`) never replace a `src/` template entry; template and message scans read files in parallel.
+
+## \[ 1.1.1 \]
+
+- 2026-10-08T09:02:05.051Z

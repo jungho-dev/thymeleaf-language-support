@@ -1,7 +1,7 @@
 // providers/JavaViewProvider.ts
 
 import { vscode } from "@exportLibs";
-import { parseJavaFile } from "@exportModels";
+import { isModelSource, parseJavaFile } from "@exportModels";
 import { logger } from "@exportScripts";
 import type { JavaFileType, JavaTypeType, JavaViewNameType, ModelAttributeType, TemplateIndexServiceType } from "@exportTypes";
 
@@ -39,7 +39,7 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
     cache.set(key, { "version": document.version, "file": file });
     return file;
   };
-  const controllersOf = (file: JavaFileType): JavaTypeType[] => file.types.filter((type) => type.isController || type.isControllerAdvice);
+  const controllersOf = (file: JavaFileType): JavaTypeType[] => file.types.filter(isModelSource);
 
   // 1-3. 뷰 리터럴·속성 리터럴 탐색
   const viewAt = (file: JavaFileType, offset: number): JavaViewNameType | undefined => controllersOf(file).flatMap((type) => type.handlers.flatMap((handler) => handler.viewNames)).find((view) => !view.implicit && offset >= view.offset && offset <= view.offset + view.length);

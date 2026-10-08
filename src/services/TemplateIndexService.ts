@@ -1,7 +1,7 @@
 // services/TemplateIndexService.ts
 
 import { TextDecoder, vscode } from "@exportLibs";
-import { parseTemplate, templateNameFromPath } from "@exportModels";
+import { matchesGlob, parseTemplate, templateNameFromPath } from "@exportModels";
 import { logger } from "@exportScripts";
 import type { FragmentCatalogType, TemplateModelType, TextPositionType } from "@exportTypes";
 
@@ -9,6 +9,8 @@ const MAIN = `Thymeleaf-Language-Support`;
 const MAX_CANDIDATES = 20;
 const MAX_TEMPLATES = 3000;
 const MAX_STATIC = 5000;
+const READ_CHUNK = 32;
+const SOURCE_PATH_PATTERN = /[\\/]src[\\/]/;
 const UPDATE_DEBOUNCE_MS = 300;
 const ID_SELECTOR_PATTERN = /^#([\w-]+)$/;
 const FRAGMENT_REF_NAMES: ReadonlySet<string> = new Set([`insert`, `replace`, `include`, `substituteby`, `decorate`, `decorator`]);
@@ -55,6 +57,7 @@ export const TemplateIndexService = () => {
     const { searchExclude } = getConfig();
     return searchExclude.length > 0 ? `{${searchExclude.join(`,`)}}` : undefined;
   };
+  const isExcluded = (uri: vscode.Uri): boolean => matchesGlob(vscode.workspace.asRelativePath(uri, false), getConfig().searchExclude);
 
   // 1-2. 템플릿명 정규화·경로 변환
   const normalizeName = (name: string): string => name.trim().replace(/^\/+/, ``).replace(/\.html?$/i, ``);
@@ -76,6 +79,12 @@ export const TemplateIndexService = () => {
   const registerTemplate = (uri: vscode.Uri, text: string): void => {
     const name = templateNameFromPath(uri.fsPath, getConfig().templateGlobs);
     if (!name) {
+      return;
+    }
+
+    // 소스 경로 템플릿 우선
+    const existing = entries.get(name);
+    if (existing && existing.uri.fsPath !== uri.fsPath && SOURCE_PATH_PATTERN.test(existing.uri.fsPath) && !SOURCE_PATH_PATTERN.test(uri.fsPath)) {
       return;
     }
     const template = parseTemplate(text);
@@ -119,15 +128,16 @@ export const TemplateIndexService = () => {
     byPath.clear();
     staticPaths.clear();
     cache.clear();
-    const seen = new Set<string>();
+    const uris = new Map<string, vscode.Uri>();
     for (const glob of templateGlobs) {
       const prefix = glob.replace(/\/+$/, ``);
       for (const uri of await vscode.workspace.findFiles(`${prefix}/**/*.html`, excludeGlob(), MAX_TEMPLATES)) {
-        if (!seen.has(uri.fsPath)) {
-          seen.add(uri.fsPath);
-          await indexTemplateUri(uri);
-        }
+        uris.set(uri.fsPath, uri);
       }
+    }
+    const list = [...uris.values()];
+    for (let start = 0; start < list.length; start += READ_CHUNK) {
+      await Promise.all(list.slice(start, start + READ_CHUNK).map(indexTemplateUri));
     }
     for (const glob of staticGlobs) {
       for (const uri of await vscode.workspace.findFiles(glob, excludeGlob(), MAX_STATIC)) {
@@ -208,6 +218,11 @@ export const TemplateIndexService = () => {
       const position = document.positionAt(fragment.offset);
       return { "line": position.line, "column": position.character };
     }
+    const refAttribute = template.attributes.find((attribute) => attribute.prefix === `th` && attribute.name === `ref` && attribute.value.trim() === fragmentName);
+    if (refAttribute) {
+      const position = document.positionAt(refAttribute.tagOffset);
+      return { "line": position.line, "column": position.character };
+    }
     const idMatch = ID_SELECTOR_PATTERN.exec(trimmed);
     const idPattern = idMatch ? new RegExp(`\\bid\\s*=\\s*["']${idMatch[1]}["']`) : /^(?!)/;
     const found = idPattern.exec(text);
@@ -226,7 +241,7 @@ export const TemplateIndexService = () => {
   // 2-1. 조회 API
   const fragmentCatalog = (templateName: string | undefined): FragmentCatalogType | undefined => {
     const entry = templateName ? entries.get(normalizeName(templateName)) : undefined;
-    return entry ? { "fragments": entry.template.fragments, "tagNames": entry.template.tagNames, "ids": entry.template.ids } : undefined;
+    return entry ? { "fragments": entry.template.fragments, "tagNames": entry.template.tagNames, "ids": entry.template.ids, "refs": entry.template.refs } : undefined;
   };
   const includersOf = (templateName: string, depth = 3): string[] => {
     const visited = new Set<string>();
@@ -265,6 +280,9 @@ export const TemplateIndexService = () => {
 
   // 2-2. 감시 (html·정적 리소스)
   const schedule = (uri: vscode.Uri, removed: boolean): void => {
+    if (isExcluded(uri)) {
+      return;
+    }
     pending.set(uri.fsPath, removed ? undefined : uri);
     cache.clear();
     updateTimer && clearTimeout(updateTimer);

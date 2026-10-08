@@ -1,7 +1,7 @@
 // services/MessageIndexService.ts
 
 import { TextDecoder, vscode } from "@exportLibs";
-import { parseProperties } from "@exportModels";
+import { matchesGlob, parseProperties } from "@exportModels";
 import { logger } from "@exportScripts";
 import type { MessageEntryType } from "@exportTypes";
 
@@ -58,15 +58,13 @@ export const MessageIndexService = () => {
     const { messageGlobs, searchExclude } = getConfig();
     const exclude = searchExclude.length > 0 ? `{${searchExclude.join(`,`)}}` : undefined;
     byFile.clear();
-    const seen = new Set<string>();
+    const uris = new Map<string, vscode.Uri>();
     for (const glob of messageGlobs) {
       for (const uri of await vscode.workspace.findFiles(glob, exclude, MAX_FILES)) {
-        if (!seen.has(uri.fsPath)) {
-          seen.add(uri.fsPath);
-          await indexUri(uri);
-        }
+        uris.set(uri.fsPath, uri);
       }
     }
+    await Promise.all([...uris.values()].map(indexUri));
     rebuild();
     ready = true;
     emitter.fire();
@@ -76,14 +74,9 @@ export const MessageIndexService = () => {
 
   // 1-5. 감시 (debounce 후 변경 파일만 재파싱)
   const matchesConfiguredGlob = (uri: vscode.Uri): boolean => {
-    const { messageGlobs } = getConfig();
-    const normalized = uri.fsPath.replaceAll(`\\`, `/`);
-    return messageGlobs.some((glob) => {
-      const base = glob.split(`/`).at(-1) ?? ``;
-      const prefix = base.replace(/\*.*$/, ``);
-      const dirMarker = glob.split(`/`).filter((segment) => !segment.includes(`*`)).at(-1);
-      return normalized.endsWith(`.properties`) && (normalized.split(`/`).at(-1) ?? ``).startsWith(prefix) && (!dirMarker || normalized.includes(`/${dirMarker}/`));
-    });
+    const { messageGlobs, searchExclude } = getConfig();
+    const relativePath = vscode.workspace.asRelativePath(uri, false);
+    return matchesGlob(relativePath, messageGlobs) && !matchesGlob(relativePath, searchExclude);
   };
   const watch = (): vscode.Disposable => {
     const watcher = vscode.workspace.createFileSystemWatcher(`**/*.properties`);

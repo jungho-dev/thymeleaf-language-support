@@ -69,7 +69,11 @@ A dialect attribute rule begins at `th:name=` (or `data-th-name=`, `sec:`, `layo
 HTML grammar's own attribute rule. Quotes carry `string.quoted.*.html` so themes color them like other attribute
 quotes. Expression rules are named `meta.template.expression.*.thymeleaf` so string-scoped theme injections do not
 capture the closing `}`. Root identifiers are `variable.other.readwrite.thymeleaf`, properties are
-`variable.other.property.thymeleaf`, and plain tokens such as `col-md-6` are one `string.unquoted.token.thymeleaf`.
+`variable.other.property.thymeleaf`, plain tokens such as `col-md-6` are one `string.unquoted.token.thymeleaf`,
+template names and message keys are `string.other.*.thymeleaf`, fragment selectors are
+`entity.name.function.fragment.thymeleaf`, and word operators are `keyword.operator.expression.word.thymeleaf`.
+These scopes were chosen against Dark+ with `editor.tokenColorCustomizations` (strings, numbers, functions,
+types) so every token inside a `th:*` value gets a themed color instead of the default foreground.
 
 ## Parsing Pipeline
 
@@ -92,6 +96,7 @@ analyzeSemantics(template, scopes, index, options)
      segments: property (field/getter/Lombok/record, inherited), call (method), index (element/value type)
   -> diagnostics: unknown model attribute, unknown property, selection without object, message key/arity,
      link existence, fragment existence/arity
+     roots on the left of an elvis `?:` or followed by `?.` are optional and skip the unknown model attribute check
 ```
 
 ## Java Indexing
@@ -100,7 +105,9 @@ analyzeSemantics(template, scopes, index, options)
 JavaIndexService.scan()
   -> findFiles(javaGlobs) -> parseJavaFile(text) per file (comments masked, strings kept for literals)
   -> types: name, kind, annotations, extends, fields, methods, record components, enum constants, Lombok flag
-  -> controllers: handlers (paths, http methods, view names from return/ModelAndView/setViewName/implicit),
+  -> @RestController and @ResponseBody handlers: paths only (link validation and completion), no views or model
+  -> controllers: handlers (paths, http methods, view names from literal or conditional-literal returns,
+     ModelAndView, setViewName, implicit void paths),
      model attributes (addAttribute/addObject/put/setAttribute/addFlashAttribute, params, @ModelAttribute methods),
      dynamic flag (addAllAttributes, mergeAttributes, non-literal names)
   -> resolveAttributeTypes(file, text, lookupType) after the full scan (service return types need other files)
@@ -111,7 +118,9 @@ modelContextFor(templateName)
 ```
 
 The watcher re-parses changed Java files with a debounce and fires `onDidUpdate`, which refreshes diagnostics of
-open documents and Java CodeLens.
+open documents and Java CodeLens. Every watcher (Java, template, message) drops paths that match `searchExclude`
+or fall outside the configured globs (`matchesGlob`), and a template name already indexed from a `src/` path is
+not overwritten by a build-output copy such as `bin/main/templates` or `build/resources/main/templates`.
 
 ## Fragment Resolution
 
@@ -119,6 +128,8 @@ open documents and Java CodeLens.
 th:replace="~{fragments/footer :: copy(${year})}"
   -> expression node: template=fragments/footer, selector=copy, args=[${year}]
   -> TemplateIndexService.templateUri / resolveTemplate (indexed catalog first, findFiles fallback)
-  -> fragmentCatalog(template): fragments with params, element tag names, ids
-  -> findFragmentPosition: th:fragment name, then id="..." selector, then tag name, else line 0
+  -> fragmentCatalog(template): fragments with params, element tag names, ids, th:ref markers
+  -> findFragmentPosition: th:fragment name, then th:ref marker, then id="..." selector, then tag name, else line 0
+  -> arity: positional args must match the signature; named args must be declared, except on a fragment without
+     a signature, where they become fragment-local variables
 ```

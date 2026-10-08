@@ -1,7 +1,7 @@
 // services/JavaIndexService.ts
 
 import { TextDecoder, vscode } from "@exportLibs";
-import { parseJavaFile, resolveAttributeTypes } from "@exportModels";
+import { isModelSource, matchesGlob, parseJavaFile, resolveAttributeTypes } from "@exportModels";
 import { logger } from "@exportScripts";
 import type { JavaFileType, JavaHandlerType, JavaTypeType, ModelAttributeType, ModelContextType } from "@exportTypes";
 
@@ -31,7 +31,7 @@ export const JavaIndexService = () => {
   const typeIndex = new Map<string, { type: JavaTypeType; fsPath: string }[]>();
   const viewIndex = new Map<string, HandlerRefType[]>();
   const urlIndex: UrlEntryType[] = [];
-  const adviceTypes: JavaTypeType[] = [];
+  const globalTypes: JavaTypeType[] = [];
   const flashNames = new Map<string, ModelAttributeType[]>();
   const emitter = new vscode.EventEmitter<void>();
   const decoder = new TextDecoder(`utf-8`);
@@ -66,7 +66,7 @@ export const JavaIndexService = () => {
     typeIndex.clear();
     viewIndex.clear();
     urlIndex.length = 0;
-    adviceTypes.length = 0;
+    globalTypes.length = 0;
     flashNames.clear();
     for (const file of files.values()) {
       const isTest = /[\\/](test|tests)[\\/]/.test(file.fsPath);
@@ -74,7 +74,7 @@ export const JavaIndexService = () => {
         const entries = typeIndex.get(type.name) ?? [];
         isTest ? entries.push({ "type": type, "fsPath": file.fsPath }) : entries.unshift({ "type": type, "fsPath": file.fsPath });
         typeIndex.set(type.name, entries);
-        type.isControllerAdvice && adviceTypes.push(type);
+        (type.isControllerAdvice || type.isInterceptor) && globalTypes.push(type);
         for (const flash of type.flashAttributes) {
           const list = flashNames.get(flash.name) ?? [];
           list.push(flash);
@@ -131,7 +131,7 @@ export const JavaIndexService = () => {
       for (const entry of results) {
         if (entry) {
           indexFile(entry.file);
-          (entry.file.types.some((type) => type.isController || type.isControllerAdvice)) && parsedTexts.push(entry);
+          entry.file.types.some(isModelSource) && parsedTexts.push(entry);
         }
       }
     }
@@ -162,7 +162,15 @@ export const JavaIndexService = () => {
   const removeFile = (uri: vscode.Uri): void => {
     files.delete(uri.fsPath) && rebuildDerived();
   };
+  const isIndexTarget = (uri: vscode.Uri): boolean => {
+    const { enabled, javaGlobs, searchExclude } = getConfig();
+    const relativePath = vscode.workspace.asRelativePath(uri, false);
+    return enabled && matchesGlob(relativePath, javaGlobs) && !matchesGlob(relativePath, searchExclude);
+  };
   const scheduleUpdate = (uri: vscode.Uri, removed: boolean): void => {
+    if (!files.has(uri.fsPath) && !isIndexTarget(uri)) {
+      return;
+    }
     removed ? removeFile(uri) : pendingUpdates.add(uri.fsPath);
     updateTimer && clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
@@ -204,10 +212,10 @@ export const JavaIndexService = () => {
         }
       }
     }
-    for (const advice of adviceTypes) {
-      advice.modelAttributeMethods.forEach(add);
-      advice.classAttributes.forEach(add);
-      dynamic ||= advice.dynamicModel;
+    for (const globalType of globalTypes) {
+      globalType.modelAttributeMethods.forEach(add);
+      globalType.classAttributes.forEach(add);
+      dynamic ||= globalType.dynamicModel;
     }
     for (const list of flashNames.values()) {
       list.forEach(add);
@@ -237,7 +245,7 @@ export const JavaIndexService = () => {
   const isReady = (): boolean => ready;
   const isScanning = (): boolean => scanning;
   const fileCount = (): number => files.size;
-  const controllerCount = (): number => [...files.values()].reduce((count, file) => count + file.types.filter((type) => type.isController).length, 0);
+  const controllerCount = (): number => [...files.values()].reduce((count, file) => count + file.types.filter((type) => type.isController || type.isRestController).length, 0);
 
   // 2-3. 감시·해제
   const watch = (): vscode.Disposable => {

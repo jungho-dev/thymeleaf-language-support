@@ -70,6 +70,52 @@ export const templateNameFromPath = (fsPath: string, templateGlobs: string[]): s
   return undefined;
 };
 
+// 3-1. 글롭 패턴 일치 ---------------------------------------------------------
+const globCache = new Map<string, RegExp>();
+const globToRegExp = (glob: string): RegExp => {
+  const cached = globCache.get(glob);
+  if (cached) {
+    return cached;
+  }
+  let source = ``;
+  let braceDepth = 0;
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === `*` && glob[i + 1] === `*`) {
+      const slashAfter = glob[i + 2] === `/`;
+      source += slashAfter ? `(?:.*/)?` : `.*`;
+      i += slashAfter ? 2 : 1;
+    }
+    else if (ch === `*`) {
+      source += `[^/]*`;
+    }
+    else if (ch === `?`) {
+      source += `[^/]`;
+    }
+    else if (ch === `{`) {
+      braceDepth++;
+      source += `(?:`;
+    }
+    else if (ch === `}` && braceDepth > 0) {
+      braceDepth--;
+      source += `)`;
+    }
+    else if (ch === `,` && braceDepth > 0) {
+      source += `|`;
+    }
+    else {
+      source += /[.+^$()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+    }
+  }
+  const pattern = new RegExp(`^${source}$`, `i`);
+  globCache.set(glob, pattern);
+  return pattern;
+};
+export const matchesGlob = (relativePath: string, globs: string[]): boolean => {
+  const normalized = relativePath.replaceAll(`\\`, `/`).replace(/^\/+/, ``);
+  return globs.some((glob) => globToRegExp(glob.replace(/^\/+/, ``)).test(normalized));
+};
+
 // 4. 인라인 표현식 스캔 ----------------------------------------------------------------
 const scanInlines = (text: string, start: number, end: number, scriptMode: boolean, elementIndex: number, inlines: TemplateInlineType[]): void => {
   let cursor = start;
@@ -132,6 +178,7 @@ export const parseTemplate = (text: string): TemplateModelType => {
   const elements: TemplateElementType[] = [];
   const tagNames = new Set<string>();
   const ids = new Set<string>();
+  const refs = new Set<string>();
   const openStack: TemplateElementType[] = [];
   let hasNamespace = false;
   let cursor = 0;
@@ -274,6 +321,9 @@ export const parseTemplate = (text: string): TemplateModelType => {
         const fragment = toFragment(attribute);
         fragment && fragments.push(fragment);
       }
+      else if (attribute.name === `ref` && attribute.prefix === `th` && attribute.value.trim() !== ``) {
+        refs.add(attribute.value.trim());
+      }
     }
     cursor = pointer;
 
@@ -294,7 +344,7 @@ export const parseTemplate = (text: string): TemplateModelType => {
     }
   }
 
-  return { "attributes": attributes, "inlines": inlines, "fragments": fragments, "elements": elements, "tagNames": tagNames, "ids": ids, "hasNamespace": hasNamespace, "isThymeleaf": hasNamespace || attributes.length > 0 };
+  return { "attributes": attributes, "inlines": inlines, "fragments": fragments, "elements": elements, "tagNames": tagNames, "ids": ids, "refs": refs, "hasNamespace": hasNamespace, "isThymeleaf": hasNamespace || attributes.length > 0 };
 };
 
 // 9. 요소별 스코프 (th:each·th:with·fragment 파라미터·th:object 상속) ----------------------------

@@ -125,7 +125,7 @@ describe(`expression kinds`, () => {
   test(`message expression key and nested parameter`, () => {
     const [tokens] = tokenize([`<p th:text="#{home.welcome(\${name})}">`]);
 
-    expect(hasScope(tokens, `home.welcome`, `support.constant.message-key.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `home.welcome`, `string.other.message-key.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `name`, `variable.other.readwrite.thymeleaf`)).toBe(true);
   });
 
@@ -134,7 +134,7 @@ describe(`expression kinds`, () => {
 
     expect(hasScope(tokens, `fragments/footer`, `entity.name.fragment.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `::`, `keyword.operator.fragment-selector.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `copy`, `entity.name.fragment.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `copy`, `entity.name.function.fragment.thymeleaf`)).toBe(true);
   });
 
   test(`literal substitution, operators, utilities, and literals`, () => {
@@ -143,8 +143,8 @@ describe(`expression kinds`, () => {
     expect(hasScope(tokens, `Hi `, `string.quoted.other.literal-substitution.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `#strings`, `support.class.utility.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `isEmpty`, `entity.name.function.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `and`, `keyword.operator.word.thymeleaf`)).toBe(true);
-    expect(hasScope(tokens, `gt`, `keyword.operator.word.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `and`, `keyword.operator.expression.word.thymeleaf`)).toBe(true);
+    expect(hasScope(tokens, `gt`, `keyword.operator.expression.word.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `10`, `constant.numeric.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `true`, `constant.language.thymeleaf`)).toBe(true);
     expect(hasScope(tokens, `==`, `keyword.operator.thymeleaf`)).toBe(true);

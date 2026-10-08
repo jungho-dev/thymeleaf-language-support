@@ -9,7 +9,7 @@ const TYPE_DECL_PATTERN = /(?<![@\w.])(class|interface|enum|record)\s+([A-Za-z_]
 const ANNOTATION_PATTERN = /@([\w.]+)(?:\s*\(((?:[^()]|\([^()]*\))*)\))?/g;
 const METHOD_PATTERN = /((?:@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)((?:(?:public|protected|private|static|final|abstract|synchronized|default|native|strictfp)\s+)*)(?:<[^>]*>\s*)?([\w.$]+(?:\s*<[^;{}()]*?>)?(?:\s*\[\s*\])*)\s+([A-Za-z_$][\w$]*)\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?:throws\s+[\w.,\s]+?)?\s*(\{|;)/g;
 const FIELD_PATTERN = /((?:@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)((?:(?:public|protected|private|static|final|transient|volatile)\s+)*)([\w.$]+(?:\s*<[^;{}()=]*?>)?(?:\s*\[\s*\])*)\s+([A-Za-z_$][\w$]*)\s*(?:=[^;]*)?;/g;
-const MODEL_CALL_PATTERN = /\b([A-Za-z_$][\w$]*)\s*\.\s*(addAttribute|addObject|addFlashAttribute|put|setAttribute|addAllAttributes|mergeAttributes|putAll|addAllObjects)\s*\(/g;
+const MODEL_CALL_PATTERN = /\b([A-Za-z_$][\w$]*)(?:\s*\.\s*getModel(?:Map)?\s*\(\s*\))?\s*\.\s*(addAttribute|addObject|addFlashAttribute|put|setAttribute|addAllAttributes|mergeAttributes|putAll|addAllObjects)\s*\(/g;
 const RETURN_PATTERN = /\breturn\b([^;]*);/g;
 const STRING_LITERAL_PATTERN = /"((?:[^"\\]|\\.)*)"/g;
 const NEW_MAV_PATTERN = /new\s+ModelAndView\s*\(\s*"([^"]*)"(?:\s*,\s*"([^"]*)"\s*,)?/g;
@@ -17,6 +17,7 @@ const SET_VIEW_PATTERN = /\.\s*setViewName\s*\(\s*"([^"]*)"/g;
 const LOCAL_DECL_PATTERN = /(?<![\w.])((?:[A-Z][\w.]*|var)(?:\s*<[^;=()]*?>)?(?:\s*\[\s*\])*)\s+([a-z_$][\w$]*)\s*(=|;|:)/g;
 const KEYWORD_SET: ReadonlySet<string> = new Set([`return`, `new`, `throw`, `else`, `case`, `import`, `package`, `public`, `private`, `protected`, `static`, `final`, `abstract`, `if`, `for`, `while`, `switch`, `try`, `catch`, `finally`, `do`, `synchronized`, `instanceof`]);
 const MAPPING_ANNOTATIONS: Readonly<Record<string, string[]>> = { "RequestMapping": [], "GetMapping": [`GET`], "PostMapping": [`POST`], "PutMapping": [`PUT`], "DeleteMapping": [`DELETE`], "PatchMapping": [`PATCH`] };
+const INTERCEPTOR_TYPES: ReadonlySet<string> = new Set([`HandlerInterceptor`, `AsyncHandlerInterceptor`, `WebRequestInterceptor`, `AsyncWebRequestInterceptor`, `HandlerInterceptorAdapter`]);
 const MODEL_RECEIVER_TYPES: ReadonlySet<string> = new Set([`Model`, `ModelMap`, `ExtendedModelMap`, `ModelAndView`, `RedirectAttributes`, `RedirectAttributesModelMap`, `Map`, `HashMap`, `LinkedHashMap`, `HttpServletRequest`, `HttpSession`, `WebRequest`, `ServletRequest`]);
 const SIMPLE_TYPES: ReadonlySet<string> = new Set([`String`, `int`, `long`, `short`, `byte`, `char`, `boolean`, `double`, `float`, `Integer`, `Long`, `Short`, `Byte`, `Character`, `Boolean`, `Double`, `Float`, `BigDecimal`, `BigInteger`, `LocalDate`, `LocalDateTime`, `LocalTime`, `Date`, `UUID`, `Object`, `Number`, `CharSequence`]);
 const FRAMEWORK_PARAM_TYPES: ReadonlySet<string> = new Set([`Model`, `ModelMap`, `ModelAndView`, `HttpServletRequest`, `HttpServletResponse`, `HttpSession`, `Principal`, `Authentication`, `Locale`, `BindingResult`, `Errors`, `RedirectAttributes`, `Pageable`, `Sort`, `MultipartFile`, `WebRequest`, `NativeWebRequest`, `ServletRequest`, `ServletResponse`, `SessionStatus`, `TimeZone`, `ZoneId`, `InputStream`, `OutputStream`, `Reader`, `Writer`, `HttpMethod`, `HttpEntity`, `RequestEntity`, `UriComponentsBuilder`, `ServletUriComponentsBuilder`, `PushBuilder`, `CsrfToken`, `UserDetails`, `MultipartHttpServletRequest`, `HttpHeaders`, `Map`, `List`, `Set`, `Collection`, `Optional`, `Device`]);
@@ -167,7 +168,7 @@ const parseAnnotations = (text: string): JavaAnnotationType[] => {
 };
 const annotationLiterals = (args: string, keys: string[]): string[] => {
   const literals: string[] = [];
-  const named = new RegExp(`\\b(?:${keys.join(`|`)})\\s*=\\s*(\\{[^}]*\\}|"[^"]*")`, `g`);
+  const named = new RegExp(`\\b(?:${keys.join(`|`)})\\s*=\\s*(\\{(?:"(?:[^"\\\\]|\\\\.)*"|[^}"])*\\}|"(?:[^"\\\\]|\\\\.)*")`, `g`);
   const namedMatches = [...args.matchAll(named)];
   const source = namedMatches.length > 0 ? namedMatches.map((match) => match[1]).join(`,`) : /^\s*(?:\{|")/.test(args) ? args : ``;
   for (const match of source.matchAll(/"([^"]*)"/g)) {
@@ -177,6 +178,7 @@ const annotationLiterals = (args: string, keys: string[]): string[] => {
 };
 const hasAnnotation = (annotations: JavaAnnotationType[], name: string): boolean => annotations.some((annotation) => annotation.name === name);
 const findAnnotation = (annotations: JavaAnnotationType[], name: string): JavaAnnotationType | undefined => annotations.find((annotation) => annotation.name === name);
+export const isModelSource = (type: JavaTypeType): boolean => type.isController || type.isControllerAdvice || type.isInterceptor;
 
 // 5. 타입명 유틸 -----------------------------------------------------------------------------
 export const simpleTypeName = (typeName: string): string => {
@@ -347,7 +349,9 @@ export const parseJavaFile = (text: string, fsPath: string): JavaFileType => {
         "bodyStart": bodyStart,
         "bodyEnd": bodyEnd,
         "isController": hasAnnotation(annotations, `Controller`),
-        "isControllerAdvice": hasAnnotation(annotations, `ControllerAdvice`),
+        "isRestController": hasAnnotation(annotations, `RestController`),
+        "isControllerAdvice": hasAnnotation(annotations, `ControllerAdvice`) || hasAnnotation(annotations, `RestControllerAdvice`),
+        "isInterceptor": implementsNames.some((implemented) => INTERCEPTOR_TYPES.has(implemented)) || (extendsName !== undefined && INTERCEPTOR_TYPES.has(extendsName)),
         "classPaths": annotationLiterals(findAnnotation(annotations, `RequestMapping`)?.args ?? ``, [`value`, `path`]),
         "sessionAttributes": annotationLiterals(findAnnotation(annotations, `SessionAttributes`)?.args ?? ``, [`value`, `names`]),
         "handlers": [],
@@ -356,7 +360,7 @@ export const parseJavaFile = (text: string, fsPath: string): JavaFileType => {
         "flashAttributes": [],
         "dynamicModel": false,
       };
-      (typeModel.isController || typeModel.isControllerAdvice) && analyzeController(typeModel, masked, fsPath, lineStarts);
+      (isModelSource(typeModel) || typeModel.isRestController) && analyzeController(typeModel, masked, fsPath, lineStarts);
       types.push(typeModel);
 
       collectTypes(bodyStart + 1, bodyEnd, qualifiedName);
@@ -404,11 +408,6 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
       dynamicMethods.add(ownerName);
       continue;
     }
-    const literal = /^"((?:[^"\\]|\\.)*)"$/.exec(args[0] ?? ``);
-    if (!literal) {
-      dynamicMethods.add(ownerName);
-      continue;
-    }
     let source: ModelAttributeSourceType = `addAttribute`;
     if (operation === `addFlashAttribute`) {
       source = `flash`;
@@ -424,12 +423,22 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
         continue;
       }
     }
+
+    // 세션 속성 제외 (모델 미노출)
+    if (source === `session`) {
+      continue;
+    }
+    const literal = /^"((?:[^"\\]|\\.)*)"$/.exec(args[0] ?? ``);
+    if (!literal) {
+      dynamicMethods.add(ownerName);
+      continue;
+    }
     const literalOffset = masked.indexOf(`"`, openParen) + 1;
     const attribute = buildAttribute(literal[1], literalOffset, literal[1].length, source, ownerName, args[1]);
     if (source === `flash`) {
       type.flashAttributes.push(attribute);
     }
-    else if (source !== `session`) {
+    else {
       type.classAttributes.push(attribute);
       const list = attributesByMethod.get(ownerName) ?? [];
       list.push(attribute);
@@ -480,8 +489,11 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
     const methodPaths = annotationLiterals(mapping.args, [`value`, `path`]);
     const paths = combinePaths(type.classPaths, methodPaths);
     const httpMethods = MAPPING_ANNOTATIONS[mapping.name].length > 0 ? MAPPING_ANNOTATIONS[mapping.name] : [...mapping.args.matchAll(/RequestMethod\.(\w+)/g)].map((match) => match[1]);
-    const viewNames = collectViewNames(masked, method, paths, positionOf);
-    const attributes = [...(attributesByMethod.get(method.name) ?? []), ...paramAttributes];
+
+    // 응답 본문 핸들러
+    const rendersView = !type.isRestController && !hasAnnotation(type.annotations, `ResponseBody`) && !hasAnnotation(method.annotations, `ResponseBody`);
+    const viewNames = rendersView ? collectViewNames(masked, method, paths, positionOf) : [];
+    const attributes = rendersView ? [...(attributesByMethod.get(method.name) ?? []), ...paramAttributes] : [];
     type.handlers.push({ "methodName": method.name, "line": method.line, "offset": method.offset, "paths": paths, "httpMethods": httpMethods, "viewNames": viewNames, "attributes": attributes, "dynamic": dynamicMethods.has(method.name) });
   }
   type.dynamicModel = dynamicMethods.size > 0;
@@ -539,6 +551,7 @@ const collectViewNames = (masked: string, method: JavaMethodType, paths: string[
   for (const statement of body.matchAll(RETURN_PATTERN)) {
     const statementBase = base + statement.index + `return`.length;
     const expression = statement[1];
+    const literalOnly = isViewLiteralExpression(expression);
     STRING_LITERAL_PATTERN.lastIndex = 0;
     let found = false;
     for (const literal of expression.matchAll(STRING_LITERAL_PATTERN)) {
@@ -546,8 +559,8 @@ const collectViewNames = (masked: string, method: JavaMethodType, paths: string[
       if (attributeLiteralOffsets.has(offset)) {
         continue;
       }
-      pushView(literal[1], offset);
       found = true;
+      literalOnly && pushView(literal[1], offset);
     }
     const variable = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(expression)?.[1];
     if (!found && variable) {
@@ -563,6 +576,20 @@ const collectViewNames = (masked: string, method: JavaMethodType, paths: string[
     }
   }
   return views;
+};
+
+// 11-1. 리터럴 뷰명 반환식 판정 -----------------------------------------------
+const isViewLiteralExpression = (expression: string): boolean => {
+  let text = expression.trim();
+  while (text.startsWith(`(`) && findMatching(text, 0, `(`, `)`) === text.length - 1) {
+    text = text.slice(1, -1).trim();
+  }
+  if (/^"(?:[^"\\]|\\.)*"$/.test(text)) {
+    return true;
+  }
+  const conditional = splitTopLevel(text, `?`);
+  const branches = conditional.length === 2 ? splitTopLevel(conditional[1], `:`) : [];
+  return branches.length === 2 && branches.every(isViewLiteralExpression);
 };
 
 // 12. 메서드 본문 지역 변수 타입 수집 -----------------------------------------------------------
@@ -731,7 +758,7 @@ const resolveMember = (ownerType: string, segment: string, context: JavaInferenc
 export const resolveAttributeTypes = (file: JavaFileType, text: string, lookupType: (simpleName: string) => JavaTypeType | undefined): void => {
   const { masked } = maskSource(text);
   for (const type of file.types) {
-    if (!type.isController && !type.isControllerAdvice) {
+    if (!isModelSource(type)) {
       continue;
     }
     const fields = new Map(type.fields.map((field) => [field.name, field.type]));

@@ -107,7 +107,7 @@
         },
         {
           "match": "(?<![\\w.-])(and|or|not|eq|ne|gt|ge|lt|le)(?![\\w.-])",
-          "name": "keyword.operator.word.thymeleaf"
+          "name": "keyword.operator.expression.word.thymeleaf"
         },
         {
           "match": "(?<![\\w.-])-?\\d+(?:\\.\\d+)?(?![\\w.-])",
@@ -225,7 +225,7 @@
         },
         {
           "match": "[\\w.\\-]+",
-          "name": "support.constant.message-key.thymeleaf"
+          "name": "string.other.message-key.thymeleaf"
         }
       ]
     },
@@ -313,6 +313,17 @@
           "include": "#preprocessing"
         },
         {
+          "match": "(::)\\s*([\\w$-]+)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.fragment-selector.thymeleaf"
+            },
+            "2": {
+              "name": "entity.name.function.fragment.thymeleaf"
+            }
+          }
+        },
+        {
           "include": "#fragment-operator"
         },
         {
@@ -341,7 +352,7 @@
         },
         {
           "match": "[\\w/.\\-]+",
-          "name": "entity.name.fragment.thymeleaf"
+          "name": "string.other.template-name.thymeleaf entity.name.fragment.thymeleaf"
         }
       ]
     },
@@ -432,7 +443,7 @@
         },
         {
           "match": "\\b(and|or|not|eq|ne|gt|ge|lt|le|div|mod|instanceof|matches|new)\\b",
-          "name": "keyword.operator.word.thymeleaf"
+          "name": "keyword.operator.expression.word.thymeleaf"
         },
         {
           "match": "(?<![.#@\\w$])(param|session|application)\\b(?=\\s*[.\\[])",
@@ -514,7 +525,7 @@
     },
     "word-operator": {
       "match": "\\b(and|or|not|eq|ne|gt|ge|lt|le)\\b",
-      "name": "keyword.operator.word.thymeleaf"
+      "name": "keyword.operator.expression.word.thymeleaf"
     },
     "fragment-operator": {
       "match": "::",

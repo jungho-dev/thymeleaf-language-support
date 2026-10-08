@@ -21,7 +21,7 @@ const buildIndex = (overrides: Partial<SemanticIndexType> = {}): SemanticIndexTy
   "findMessages": (key) => (key === `home.welcome` ? [{ "key": key, "value": `Hi {0} {1}`, "fsPath": `m`, "locale": `default`, "line": 0, "column": 0, "placeholders": 2 }] : []),
   "hasLinks": () => true,
   "linkExists": (path) => path === `/users` || path === `/css/app.css`,
-  "fragmentCatalog": (name) => (name === `fragments/footer` ? { "fragments": [{ "name": `copy`, "params": [`year`], "prefix": `th`, "tag": `footer`, "offset": 0, "length": 1, "elementIndex": 0 }], "tagNames": new Set([`footer`, `nav`]), "ids": new Set() } : undefined),
+  "fragmentCatalog": (name) => (name === `fragments/footer` ? { "fragments": [{ "name": `copy`, "params": [`year`], "prefix": `th`, "tag": `footer`, "offset": 0, "length": 1, "elementIndex": 0 }], "tagNames": new Set([`footer`, `nav`]), "ids": new Set(), "refs": new Set([`slot`]) } : name === `components/datepicker` ? { "fragments": [{ "name": `datepicker`, "params": [], "prefix": `th`, "tag": `section`, "offset": 0, "length": 1, "elementIndex": 0 }], "tagNames": new Set([`section`]), "ids": new Set(), "refs": new Set() } : undefined),
   ...overrides,
 });
 const options: SemanticOptionsType = { "templateName": `home`, "modelValidation": true, "linkValidation": true, "messageValidation": true };
@@ -102,6 +102,24 @@ describe(`messages, links, fragments`, () => {
     expect(codesOf(`<div th:replace="~{fragments/footer :: copy(owner=1)}"></div>`)).toEqual([`thymeleaf-fragment-arity`]);
     expect(codesOf(`<div th:fragment="local(a)"></div><div th:replace="~{:: local(1)}"></div><div th:replace="~{:: nope}"></div>`)).toEqual([`thymeleaf-unknown-fragment`]);
     expect(codesOf(`<div th:replace="~{unknown/tpl :: x}"></div>`)).toEqual([]);
+  });
+
+  test(`accepts th:ref markers and named arguments to parameterless fragments`, () => {
+    expect(codesOf(`<th:block th:replace="~{fragments/footer :: copy(~{:: title-ref})}"><b th:ref="title-ref"></b></th:block>`)).toEqual([]);
+    expect(codesOf(`<div th:replace="~{fragments/footer :: slot}"></div>`)).toEqual([]);
+    expect(codesOf(`<div th:replace="~{components/datepicker :: datepicker(label='Day', span='92')}"></div>`)).toEqual([]);
+    expect(codesOf(`<div th:replace="~{components/datepicker :: datepicker('Day')}"></div>`)).toEqual([`thymeleaf-fragment-arity`]);
+  });
+});
+
+// 3-1. 선택적 모델 속성 -------------------------------------------------------
+describe(`optional model attributes`, () => {
+  test(`skips unknown roots guarded by elvis or safe navigation`, () => {
+    expect(codesOf(`<title th:text="\${pageTitle} ?: 'Home'"></title>`)).toEqual([]);
+    expect(codesOf(`<title th:text="\${pageTitle ?: 'Home'}"></title>`)).toEqual([]);
+    expect(codesOf(`<title th:text="\${pageTitle?.trim()}"></title>`)).toEqual([]);
+    expect(codesOf(`<title th:text="'Home' + \${pageTitle}"></title>`)).toEqual([`thymeleaf-unknown-model-attribute`]);
+    expect(codesOf(`<title th:text="\${user.nmae} ?: 'x'"></title>`)).toEqual([`thymeleaf-unknown-property`]);
   });
 });
 

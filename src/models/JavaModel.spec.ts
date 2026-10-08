@@ -202,3 +202,113 @@ describe(`inferExpressionType`, () => {
     expect(inferExpressionType(`repo.findAll()`, context)).toBeUndefined();
   });
 });
+
+// 4. 인터셉터 모델 속성 -------------------------------------------------------
+describe(`parseJavaFile interceptor`, () => {
+  const INTERCEPTOR = `package com.example.handler;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.ModelAndView;
+
+@Component
+public class LayoutHandler implements HandlerInterceptor {
+  private static final String CHECKED_AT = "checkedAt";
+
+  @Override
+  public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+    HttpSession session = request.getSession(false);
+    session.setAttribute(CHECKED_AT, System.currentTimeMillis());
+    return true;
+  }
+
+  @Override
+  public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) {
+    LoginUser loginUser = findLoginUser(request);
+    modelAndView.addObject("loginUser", loginUser);
+    modelAndView.addObject("theme", "light");
+    modelAndView.getModel().put("imsVersion", "1.0");
+  }
+}
+`;
+  const file = parseJavaFile(INTERCEPTOR, `C:/src/LayoutHandler.java`);
+  const interceptor = file.types[0];
+
+  test(`collects global attributes without session constants marking the model dynamic`, () => {
+    expect(interceptor.isInterceptor).toBe(true);
+    expect(interceptor.isController).toBe(false);
+    expect(interceptor.handlers).toEqual([]);
+    expect(interceptor.classAttributes.map((attribute) => attribute.name)).toEqual([`loginUser`, `theme`, `imsVersion`]);
+    expect(interceptor.dynamicModel).toBe(false);
+  });
+
+  test(`infers interceptor attribute types`, () => {
+    const loginUser = parseJavaFile(`package com.example; public class Login { public record LoginUser(String empNm, String deptNm) {} }`, `C:/src/Login.java`).types.find((type) => type.name === `LoginUser`);
+    resolveAttributeTypes(file, INTERCEPTOR, (name) => (name === `LoginUser` ? loginUser : undefined));
+    const byName = new Map(interceptor.classAttributes.map((attribute) => [attribute.name, attribute.typeName]));
+    expect(byName.get(`loginUser`)).toBe(`LoginUser`);
+    expect(byName.get(`theme`)).toBe(`String`);
+  });
+});
+
+// 5. REST 핸들러·배열 경로 ----------------------------------------------------
+describe(`parseJavaFile rest and array paths`, () => {
+  const REST = `package com.example.api;
+@RestController
+@RequestMapping(value={"/api/emp"}, produces={JSON_VALUE})
+public class EmpController {
+  @GetMapping(value={"/codes"})
+  public HttpBody findCodes() {
+    return httpOk("done", service.findCodes());
+  }
+  @PostMapping(value={"/excel"}, consumes={JSON_VALUE})
+  public void writeExcel(@RequestBody EmpList request, HttpServletResponse response) {
+  }
+  private String maskEmail(String email) {
+    return "%s***".formatted(email);
+  }
+}
+`;
+  const PAGE = `package com.example.web;
+@Controller
+public class MenuController {
+  @GetMapping(value={"/page/{group}/{program}"})
+  public String showProgram(@PathVariable("group") String group, Model model) {
+    model.addAttribute("contentView", "pages/%s".formatted(group));
+    return "common/main";
+  }
+  @GetMapping("/dynamic")
+  public String showDynamic(String name) {
+    return "pages/" + name;
+  }
+  @GetMapping("/choice")
+  public String showChoice(boolean wide) {
+    return wide ? "pages/wide" : "pages/narrow";
+  }
+  @ResponseBody
+  @GetMapping("/ping")
+  public String ping() {
+    return "pong";
+  }
+}
+`;
+  const rest = parseJavaFile(REST, `C:/src/EmpController.java`).types[0];
+  const page = parseJavaFile(PAGE, `C:/src/MenuController.java`).types[0];
+
+  test(`indexes rest handler paths without views or model attributes`, () => {
+    expect(rest.isRestController).toBe(true);
+    expect(rest.isController).toBe(false);
+    expect(rest.classPaths).toEqual([`/api/emp`]);
+    expect(rest.handlers.map((handler) => [handler.methodName, handler.paths, handler.viewNames.length, handler.attributes.length])).toEqual([[`findCodes`, [`/api/emp/codes`], 0, 0], [`writeExcel`, [`/api/emp/excel`], 0, 0]]);
+  });
+
+  test(`parses array path literals containing braces`, () => {
+    expect(page.handlers[0].paths).toEqual([`/page/{group}/{program}`]);
+    expect(page.handlers[0].viewNames.map((view) => view.name)).toEqual([`common/main`]);
+  });
+
+  test(`takes only literal or conditional-literal returns as view names`, () => {
+    const byMethod = new Map(page.handlers.map((handler) => [handler.methodName, handler.viewNames.map((view) => view.name)]));
+    expect(byMethod.get(`showDynamic`)).toEqual([]);
+    expect(byMethod.get(`showChoice`)).toEqual([`pages/wide`, `pages/narrow`]);
+    expect(byMethod.get(`ping`)).toEqual([]);
+  });
+});

@@ -297,7 +297,8 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
       if (node.kind === `selection` && !scope.objectAttribute && !scope.insideFragment) {
         push(`thymeleaf-selection-without-object`, `Selection expression *{...} has no enclosing th:object.`, `warning`, node.offset, node.length);
       }
-      if (resolution.rootKind === `unknown`) {
+      const optional = node.kind !== `selection` && (chain.guarded === true || chain.segments[0]?.safe === true);
+      if (resolution.rootKind === `unknown` && !optional) {
         const target = node.kind === `selection` ? `property '${chain.root.name}' of the th:object` : `model attribute '${chain.root.name}'`;
         push(node.kind === `selection` ? `thymeleaf-unknown-property` : `thymeleaf-unknown-model-attribute`, `Unknown ${target}. No controller mapped to this template adds it.`, `warning`, chain.root.offset, chain.root.length);
       }
@@ -334,15 +335,20 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
     // 프래그먼트 존재·인자 수
     if (node.kind === `fragment` && node.selector && !node.selector.dynamic && node.template && !node.template.dynamic) {
       const selector = node.selector.value.trim();
-      const catalog = node.template.value === `` || node.template.value === `this` ? { "fragments": template.fragments, "tagNames": template.tagNames, "ids": template.ids } : index.fragmentCatalog(node.template.value);
+      const catalog = node.template.value === `` || node.template.value === `this` ? { "fragments": template.fragments, "tagNames": template.tagNames, "ids": template.ids, "refs": template.refs } : index.fragmentCatalog(node.template.value);
       if (catalog && FRAGMENT_SELECTOR_NAME_PATTERN.test(selector)) {
         const definition = catalog.fragments.find((fragment) => fragment.name === selector);
-        if (!definition && !catalog.tagNames.has(selector.toLowerCase())) {
+        if (!definition && !catalog.tagNames.has(selector.toLowerCase()) && !catalog.refs.has(selector)) {
           push(`thymeleaf-unknown-fragment`, `Fragment '${selector}' was not found in template '${node.template.value || `this`}'.`, `warning`, node.selector.offset, node.selector.length);
         }
         else if (definition && node.args.length > 0) {
           const named = node.args.filter((arg) => arg.name !== ``);
-          if (named.length > 0) {
+
+          // 시그니처 없는 프래그먼트 이름 인자
+          if (named.length > 0 && definition.params.length === 0) {
+            named.length !== node.args.length && push(`thymeleaf-fragment-arity`, `Fragment '${selector}' declares no parameters. Pass values by name only (name=value).`, `warning`, node.offset, node.length);
+          }
+          else if (named.length > 0) {
             for (const arg of named) {
               definition.params.includes(arg.name) || push(`thymeleaf-fragment-arity`, `Fragment '${selector}' has no parameter '${arg.name}'. Parameters: ${definition.params.join(`, `) || `(none)`}.`, `warning`, arg.offset, arg.length);
             }

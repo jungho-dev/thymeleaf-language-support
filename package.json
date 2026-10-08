@@ -4,12 +4,20 @@
   "description": "Thymeleaf syntax highlighting, expression parser diagnostics, Spring controller model validation, completion, hover, navigation, and fragment tooling for HTML templates in VSCode",
   "publisher": "JUNGHO",
   "icon": "logo.png",
+  "galleryBanner": {
+    "color": "#005F0F",
+    "theme": "dark"
+  },
   "license": "Apache-2.0",
   "main": "./out/extension.js",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/jungho-dev/thymeleaf-language-support.git"
+  },
+  "homepage": "https://github.com/jungho-dev/thymeleaf-language-support#readme",
+  "bugs": {
+    "url": "https://github.com/jungho-dev/thymeleaf-language-support/issues"
   },
   "categories": [
     "Programming Languages",

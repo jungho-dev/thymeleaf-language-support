@@ -5,6 +5,61 @@ the built-in HTML language mode. It keeps HTML completion, formatting, and Emmet
 highlighting, an expression parser, Spring controller model validation, completion, hover, navigation, and fragment
 tooling on top.
 
+## Requirements
+
+- VS Code `1.116.0` or later, or a VSCodium build on the same engine.
+- No Java language server, JDK, or build tool is required. Java sources are indexed directly from the workspace.
+
+## Installation
+
+### From a VSIX file
+
+1. Download `thymeleaf-language-support-<version>.vsix` from the repository root.
+2. Install it with one of the following:
+   - Extensions view, `...` menu, `Install from VSIX...`, then pick the file.
+   - Command line:
+
+     ```bash
+     code --install-extension thymeleaf-language-support-1.1.1.vsix
+     ```
+
+     Use `codium` instead of `code` for VSCodium.
+3. Reload the window when prompted.
+
+### From source
+
+Building needs [Bun](https://bun.sh) and Git.
+
+```bash
+git clone https://github.com/jungho-dev/thymeleaf-language-support.git
+cd thymeleaf-language-support
+bun install
+bun run package
+code --install-extension thymeleaf-language-support-1.1.1.vsix
+```
+
+`bun run package` type-checks, bundles `out/extension.js`, and writes the `.vsix` to the project root. The file name
+follows the `version` field in `package.json`.
+
+## Quick Start
+
+1. Open the folder that contains your Spring project (the one with `src/main/java` and `src/main/resources`).
+2. Open any template under `src/main/resources/templates/`. The extension activates on HTML and Java files.
+3. Wait for the first index pass. Progress and counts appear in the `Thymeleaf-Language-Support` output channel
+   (`Thymeleaf-Language-Support: Open Log Output`).
+
+The defaults match the standard Spring Boot layout, including multi-module workspaces. For a different layout,
+adjust `templateGlobs`, `javaGlobs`, `messageGlobs`, and `staticGlobs` in the settings below, then run
+`Thymeleaf-Language-Support: Rebuild Template, Controller, and Message Index`.
+
+To silence a rule without turning diagnostics off, add its code to `disabledDiagnosticCodes`:
+
+```json
+{
+  "Thymeleaf-Language-Support.disabledDiagnosticCodes": ["thymeleaf-unknown-link"]
+}
+```
+
 ## Features
 
 - Highlight `th:*`, `data-th-*`, `sec:*`, and `layout:*` attributes, and tokenize `${...}`, `*{...}`, `#{...}`,
@@ -120,3 +175,10 @@ names mark the template as dynamic and suppress unknown-attribute reports while 
 
 The e2e runner picks the editor from `VSCODE_EXE`, then from a `codium`/`code` launcher on `PATH`, and otherwise
 downloads a stable VS Code build through `@vscode/test-electron`.
+
+## License
+
+Apache-2.0. See [license.md](license.md).
+
+The extension icon is the Thymeleaf logo from [thymeleaf.org](https://www.thymeleaf.org/). Thymeleaf is a project of
+The Thymeleaf Team. This extension is an independent community project and is not affiliated with or endorsed by it.
