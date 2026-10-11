@@ -10,7 +10,7 @@
   },
   "license": "Apache-2.0",
   "main": "./out/extension.js",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/jungho-dev/thymeleaf-language-support.git"
@@ -280,33 +280,26 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node21 --minify",
-    "compile": "bun run typecheck && bun run bundle",
-    "compile:e2e": "tsc -p tsconfig.test.json",
-    "test": "bun test",
-    "test:e2e": "bun run compile && bun run compile:e2e && node ./out-test/runTest.js",
-    "package": "bun run compile && vsce package --no-dependencies",
     "git": "bun run ~/.bootstrap/bootstrap-sync.ts --git",
     "swc": "bun run ~/.bootstrap/bootstrap-sync.ts --swc",
     "sync": "bun run ~/.bootstrap/bootstrap-sync.ts --sync",
     "tools": "bun run ~/.bootstrap/bootstrap-sync.ts --tools"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.12",
+    "@biomejs/biome": "2.5.15",
     "@swc/cli": "^0.8.1",
-    "@swc/core": "^1.16.2",
+    "@swc/core": "^1.16.18",
     "@swc/helpers": "^0.5.23",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^26.5.0",
+    "@types/node": "^26.6.5",
     "@types/vscode": "1.116.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
-    "mocha": "^12.0.0",
+    "mocha": "^12.0.3",
     "ts-morph": "^28.0.0",
     "ts-prune": "^0.10.3",
-    "tsc-alias": "^1.9.4",
+    "tsc-alias": "^1.9.7",
     "typescript": "^7.0.2",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
