@@ -38,6 +38,16 @@
   conditional-literal returns count as view names.
 - Indexing: watchers honor `searchExclude` and the configured globs, and build-output template copies
   (`bin/`, `build/`) never replace a `src/` template entry; template and message scans read files in parallel.
+- Performance: template parsing is linear in document size (inline `[[...]]` lookups no longer rescan to the end of
+  the document per tag); diagnostics and language features share one versioned parse per open document; model
+  contexts and type properties are cached per index revision; Java watcher batches rebuild derived indexes once.
+- Memory: the template index keeps fragment catalogs and root identifier usages instead of full expression trees;
+  references and Java CodeLens use precomputed positions instead of opening every usage file; closed documents are
+  evicted from the parse cache; Java and message indexing is skipped until the workspace has a Thymeleaf template.
+- Fixes: nested `th:object="*{...}"` no longer overflows the stack; `*{...}` without an object reports once per
+  expression; `th:with` values can reference earlier assignments and `th:each` variables on the same element;
+  rescans swap in a complete index instead of exposing a half-built one; static `.html` resources update the static
+  index; Java missing-view diagnostics are suppressed in workspaces without templates and cleared when disabled.
 
 ## \[ 1.1.1 \]
 
@@ -45,4 +55,4 @@
 
 ## \[ 1.1.2 \]
 
-- 2026-10-11T08:03:07.472Z
+- 2026-11-02T06:13:38.576Z

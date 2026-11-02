@@ -1,9 +1,9 @@
 // providers/ThymeleafDiagnosticProvider.ts
 
 import { vscode } from "@exportLibs";
-import { analyzeSemantics, analyzeTemplate, buildScopes } from "@exportModels";
+import { analyzeParsedTemplate, analyzeSemantics } from "@exportModels";
 import { logger } from "@exportScripts";
-import type { DiagnosticSeverityType, ExpressionIssueType, JavaIndexServiceType, SemanticIndexType, TemplateAttributeType, TemplateIndexServiceType } from "@exportTypes";
+import type { DiagnosticSeverityType, DocumentModelServiceType, ExpressionIssueType, JavaIndexServiceType, SemanticIndexType, TemplateAttributeType, TemplateIndexServiceType } from "@exportTypes";
 
 const MAIN = `Thymeleaf-Language-Support`;
 const DIAGNOSTIC_SOURCE = `Thymeleaf`;
@@ -18,9 +18,10 @@ const SEVERITY_MAP: Readonly<Record<DiagnosticSeverityType, vscode.DiagnosticSev
 // ------------------------------------------------------------------------------
 // 1. Thymeleaf 템플릿 진단 (구문 + 시맨틱)
 // ------------------------------------------------------------------------------
-export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, semanticIndex: SemanticIndexType) => {
+export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, semanticIndex: SemanticIndexType, documentModels: DocumentModelServiceType) => {
   // 0. 변수 설정 ----------------------------------------------------------------------------
   const collection = vscode.languages.createDiagnosticCollection(DIAGNOSTIC_SOURCE);
+  const requestSeq = new Map<string, number>();
 
   // 1-1. 설정 조회
   const getConfig = () => {
@@ -85,7 +86,11 @@ export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceT
       return;
     }
     const version = document.version;
-    const analysis = analyzeTemplate(text, { "additionalAttributes": config.additionalAttributes });
+    const key = document.uri.toString();
+    const request = (requestSeq.get(key) ?? 0) + 1;
+    requestSeq.set(key, request);
+    const { template, scopes } = documentModels.parseDocument(document);
+    const analysis = analyzeParsedTemplate(template, text, { "additionalAttributes": config.additionalAttributes });
     if (!analysis.template.isThymeleaf) {
       collection.delete(document.uri);
       return;
@@ -94,7 +99,6 @@ export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceT
 
     // 시맨틱 진단 (Java 인덱스 준비 후 모델 검증)
     const templateName = templateIndex.templateNameOf(document.uri);
-    const scopes = buildScopes(analysis.template);
     const semantic = analyzeSemantics(analysis.template, scopes, semanticIndex, {
       "templateName": templateName,
       "modelValidation": config.modelValidation && javaIndex.isReady(),
@@ -109,7 +113,8 @@ export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceT
     catch (error) {
       logger(`error`, `apply - template resolution failed: ${error}`);
     }
-    if (document.isClosed || document.version !== version) {
+    // 문서가 바뀌었거나 같은 문서의 더 늦은 요청이 시작됐으면 폐기
+    if (document.isClosed || document.version !== version || requestSeq.get(key) !== request) {
       return;
     }
     const filtered = config.disabledCodes.size === 0 ? diagnostics : diagnostics.filter((item) => !config.disabledCodes.has(String(item.code)));
@@ -125,9 +130,11 @@ export const ThymeleafDiagnosticProvider = (templateIndex: TemplateIndexServiceT
   // 2-3. 진단 제거·해제
   const clear = (document: vscode.TextDocument): void => {
     collection.delete(document.uri);
+    requestSeq.delete(document.uri.toString());
   };
   const dispose = (): void => {
     collection.dispose();
+    requestSeq.clear();
   };
 
   return { apply, applyOpenDocuments, clear, dispose };

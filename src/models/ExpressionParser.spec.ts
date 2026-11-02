@@ -166,3 +166,27 @@ describe(`ast extraction`, () => {
     expect(findChainAt(parsed.expressions[0], 103)).toMatchObject({ "segmentIndex": -1 });
   });
 });
+
+// 오프셋 이동 (제자리 갱신 후 참조 동일성 유지) --------------------------------------------------
+describe(`offset shifting`, () => {
+  test(`keeps each iterable and assignment expressions identical to shifted nodes`, () => {
+    const each = parseAttributeValue(`item : \${items}`, `each`, 10);
+    const assignation = parseAttributeValue(`a=\${x}, b=\${y.z}`, `assignation`, 20);
+
+    expect(each.eachIterable).toBe(each.expressions[0]);
+    expect(each.expressions[0].offset).toBe(17);
+    expect(each.expressions[0].chains[0].root.offset).toBe(19);
+    expect(assignation.assignments.map((assignment) => assignment.offset)).toEqual([20, 28]);
+    expect(assignation.assignments[1].expression).toBe(assignation.expressions[1]);
+    expect(assignation.expressions[1].chains[0].segments[0].offset).toBe(34);
+  });
+
+  test(`shifts preprocessing nodes once per nesting level`, () => {
+    const value = `#{msg.__\${key}__}`;
+    const parsed = parseAttributeValue(value, `expression`, 50);
+    const variable = parsed.expressions.find((node) => node.kind === `variable`);
+
+    expect(variable?.offset).toBe(50 + value.indexOf(`\${key}`));
+    expect(variable?.chains[0].root.offset).toBe(50 + value.indexOf(`key`));
+  });
+});

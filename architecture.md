@@ -29,6 +29,7 @@ src/
 |   |-- ThymeleafLanguageProvider.ts   completion, hover, definition, references, signature help, links, symbols
 |   `-- JavaViewProvider.ts            Java CodeLens, missing-view diagnostics, definition, references, completion
 |-- services/
+|   |-- DocumentModelService.ts        versioned parse cache of open HTML documents (diagnostics + language features)
 |   |-- TemplateIndexService.ts        template catalog, includer graph, static resources, attribute usages
 |   |-- JavaIndexService.ts            Java file parse cache, type index, view index, url index, model contexts
 |   |-- MessageIndexService.ts         properties bundles keyed by message key
@@ -121,6 +122,9 @@ The watcher re-parses changed Java files with a debounce and fires `onDidUpdate`
 open documents and Java CodeLens. Every watcher (Java, template, message) drops paths that match `searchExclude`
 or fall outside the configured globs (`matchesGlob`), and a template name already indexed from a `src/` path is
 not overwritten by a build-output copy such as `bin/main/templates` or `build/resources/main/templates`.
+Full scans build new maps and swap them in when complete, so a rescan never exposes a partial index and a
+superseded scan is discarded. Java and message scans are skipped while no template is indexed and start once the
+template watcher indexes the first template.
 
 ## Fragment Resolution
 

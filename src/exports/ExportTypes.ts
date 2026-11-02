@@ -2,7 +2,7 @@
 
 import type { ThymeleafCommand } from "@exportCommands";
 import type { JavaViewProvider, ThymeleafDiagnosticProvider, ThymeleafLanguageProvider } from "@exportProviders";
-import type { JavaIndexService, MessageIndexService, TemplateIndexService } from "@exportServices";
+import type { DocumentModelService, JavaIndexService, MessageIndexService, TemplateIndexService } from "@exportServices";
 
 // 다이얼렉트 ---------------------------------------------------------------------
 export const DIALECT_PREFIXES = [`th`, `sec`, `layout`] as const;
@@ -363,6 +363,7 @@ export interface SemanticAnalysisType {
 }
 
 // 서비스·프로바이더 타입 -------------------------------------------------------------
+export type DocumentModelServiceType = ReturnType<typeof DocumentModelService>;
 export type TemplateIndexServiceType = ReturnType<typeof TemplateIndexService>;
 export type JavaIndexServiceType = ReturnType<typeof JavaIndexService>;
 export type MessageIndexServiceType = ReturnType<typeof MessageIndexService>;

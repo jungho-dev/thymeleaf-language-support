@@ -45,6 +45,7 @@
 **/biome.jsonc
 **/.editorconfig
 **/architecture.md
+**/analysis-report.md
 
 # 테스트
 **/test/**

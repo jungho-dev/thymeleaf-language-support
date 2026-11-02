@@ -165,6 +165,20 @@ describe(`Thymeleaf-Language-Support e2e`, () => {
         const link = await vscode.commands.executeCommand(`vscode.executeDefinitionProvider`, uri, positionOf(document, `/items/{id}`, 2));
         node_assert_1.default.ok(link.some((location) => location.uri.fsPath.endsWith(`HomeController.java`)), `link definitions: ${link.map((location) => location.uri.fsPath).join(`, `)}`);
     });
+    it(`finds model attribute references across templates with indexed positions`, async () => {
+        const uri = templateUri(`index.html`);
+        const document = await vscode.workspace.openTextDocument(uri);
+        const references = await vscode.commands.executeCommand(`vscode.executeReferenceProvider`, uri, positionOf(document, `\${user.name}`, 3));
+        const brokenUri = templateUri(`broken.html`);
+        const brokenRefs = references.filter((location) => location.uri.fsPath === brokenUri.fsPath);
+        const brokenText = (await vscode.workspace.openTextDocument(brokenUri)).getText().split(`\n`);
+        node_assert_1.default.ok(references.some((location) => location.uri.fsPath.endsWith(`HomeController.java`)), `references: ${references.map((location) => location.uri.fsPath).join(`, `)}`);
+        node_assert_1.default.ok(references.some((location) => location.uri.fsPath === uri.fsPath), `missing current template reference`);
+        node_assert_1.default.ok(brokenRefs.length > 0, `missing broken.html reference`);
+        for (const location of brokenRefs) {
+            node_assert_1.default.strictEqual(brokenText[location.range.start.line].slice(location.range.start.character, location.range.end.character), `user`);
+        }
+    });
     it(`provides Java-side view CodeLens, diagnostics, and definition`, async () => {
         const uri = javaUri(node_path_1.default.join(`com`, `example`, `web`, `HomeController.java`));
         const document = await vscode.workspace.openTextDocument(uri);
@@ -173,7 +187,8 @@ describe(`Thymeleaf-Language-Support e2e`, () => {
             const found = thymeleafDiagnostics(uri);
             return found.some((item) => item.code === `thymeleaf-missing-view`) ? found : undefined;
         });
-        node_assert_1.default.strictEqual(document.getText(missing[0].range), `missing/view`);
+        const missingViews = missing.filter((item) => item.code === `thymeleaf-missing-view`).map((item) => document.getText(item.range)).sort();
+        node_assert_1.default.deepStrictEqual(missingViews, [`items/detail`, `missing/view`]);
         const lenses = await waitFor(() => {
             const found = vscode.commands.executeCommand(`vscode.executeCodeLensProvider`, uri);
             return found;

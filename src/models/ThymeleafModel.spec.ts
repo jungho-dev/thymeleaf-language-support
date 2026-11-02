@@ -236,3 +236,25 @@ describe(`helpers`, () => {
     expect(findAttributeAt(template, 1)).toBeUndefined();
   });
 });
+
+// 대형 템플릿 인라인 스캔 (선형 시간·위치 정확성) -------------------------------------------------
+describe(`inline scanning on large templates`, () => {
+  test(`finds inlines after many tags and parses in linear time`, () => {
+    const rows = `<div class="row"><span th:text="\${x}">t</span></div>\n`.repeat(32_000);
+    const html = `<html xmlns:th="http://www.thymeleaf.org"><body>${rows}<p>[[\${tail}]]</p><p>[(\${raw})]</p></body></html>`;
+    const started = performance.now();
+    const template = parseTemplate(html);
+    const elapsed = performance.now() - started;
+
+    expect(template.inlines.map((inline) => inline.offset)).toEqual([html.indexOf(`[[`), html.indexOf(`[(`)]);
+    expect(template.attributes).toHaveLength(32_000);
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  test(`keeps scanning after an inline left open in an earlier text region`, () => {
+    const html = `<p>[[ open</p><p>[[\${a}]]</p><script th:inline="javascript">var b = [[\${b}]];</script>`;
+    const template = parseTemplate(html);
+
+    expect(template.inlines.map((inline) => [inline.closed, inline.scriptMode])).toEqual([[false, false], [true, false], [true, true]]);
+  });
+});

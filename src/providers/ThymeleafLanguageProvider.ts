@@ -2,9 +2,9 @@
 
 import { findDialectAttribute, findUtilityObject, listDialectAttributes, listUtilityObjects } from "@exportData";
 import { vscode } from "@exportLibs";
-import { buildScopes, findAttributeAt, findChainAt, findExpressionAt, findInlineAt, formatTypeRef, listMethods, listProperties, parseAttributeValue, parseTemplate, resolveChain } from "@exportModels";
+import { findAttributeAt, findChainAt, findExpressionAt, findInlineAt, formatTypeRef, listMethods, listProperties, parseAttributeValue, resolveChain } from "@exportModels";
 import { logger } from "@exportScripts";
-import type { DialectPrefixType, ExpressionChainType, ExpressionNodeType, JavaIndexServiceType, MessageIndexServiceType, ParsedValueType, ResolvedTypeType, ScopeType, SemanticIndexType, SemanticOptionsType, SemanticResolutionType, TemplateAttributeType, TemplateIndexServiceType, TemplateInlineType, TemplateModelType } from "@exportTypes";
+import type { DialectPrefixType, DocumentModelServiceType, ExpressionChainType, ExpressionNodeType, JavaIndexServiceType, MessageIndexServiceType, ParsedValueType, ResolvedTypeType, ScopeType, SemanticIndexType, SemanticOptionsType, SemanticResolutionType, TemplateAttributeType, TemplateIndexServiceType, TemplateInlineType, TemplateModelType } from "@exportTypes";
 
 const MAIN = `Thymeleaf-Language-Support`;
 const ATTR_PREFIX_PATTERN = /(?:^|\s)((?:data-)?(th|sec|layout)[:-])([\w.-]*)$/;
@@ -16,6 +16,7 @@ const ROOT_TAIL_PATTERN = /(?:^|[^\w$.#@'])([A-Za-z_$]*)$/;
 const FRAGMENT_REF_NAMES: ReadonlySet<string> = new Set([`insert`, `replace`, `include`, `substituteby`, `decorate`, `decorator`]);
 const CONTEXT_OBJECTS = [`param`, `session`, `application`];
 const EMBEDDED_OPENERS = [`\${`, `*{`, `#{`, `@{`, `~{`];
+const TAG_LOOKBEHIND = 8192;
 
 interface LocateResultType {
   template: TemplateModelType;
@@ -34,36 +35,20 @@ interface OpenerContextType {
   kind: `variable` | `selection` | `message` | `link` | `fragment`;
   tail: string;
 }
-interface CachedTemplateType {
-  version: number;
-  template: TemplateModelType;
-  scopes: Map<number, ScopeType>;
-}
 
 // ------------------------------------------------------------------------------
 // 1. 완성·호버·정의·참조·시그니처·링크·심볼 프로바이더
 // ------------------------------------------------------------------------------
-export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType, semanticIndex: SemanticIndexType) => {
+export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType, semanticIndex: SemanticIndexType, documentModels: DocumentModelServiceType) => {
   // 0. 변수 설정 ----------------------------------------------------------------------------
-  const cache = new Map<string, CachedTemplateType>();
   const emptyScope: ScopeType = { "locals": new Map(), "insideFragment": false };
 
   // 1-1. 설정
   const isEnabled = (): boolean => vscode.workspace.getConfiguration(MAIN).get<boolean>(`languageFeaturesEnabled`, true);
   const semanticOptions = (templateName: string | undefined): SemanticOptionsType => ({ "templateName": templateName, "modelValidation": true, "linkValidation": true, "messageValidation": true });
 
-  // 1-2. 문서 파싱 캐시
-  const parseDocument = (document: vscode.TextDocument): CachedTemplateType => {
-    const key = document.uri.toString();
-    const cached = cache.get(key);
-    if (cached && cached.version === document.version) {
-      return cached;
-    }
-    const template = parseTemplate(document.getText());
-    const entry = { "version": document.version, "template": template, "scopes": buildScopes(template) };
-    cache.set(key, entry);
-    return entry;
-  };
+  // 1-2. 문서 파싱 (진단과 공유하는 버전 캐시)
+  const parseDocument = documentModels.parseDocument;
 
   // 1-3. 커서 위치 컨텍스트
   const locate = (document: vscode.TextDocument, position: vscode.Position): LocateResultType => {
@@ -216,7 +201,8 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
         return undefined;
       }
       const lineBefore = document.lineAt(position.line).text.slice(0, position.character);
-      const textBefore = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
+      const cursorOffset = document.offsetAt(position);
+      const textBefore = document.getText(new vscode.Range(document.positionAt(Math.max(0, cursorOffset - TAG_LOOKBEHIND)), position));
 
       // 속성명 완성
       const attrMatch = ATTR_PREFIX_PATTERN.exec(lineBefore);
@@ -252,7 +238,7 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
       if (located.offset < valueStart) {
         return undefined;
       }
-      const valueBefore = document.getText().slice(valueStart, located.offset);
+      const valueBefore = document.getText(new vscode.Range(document.positionAt(valueStart), position));
       const opener = openerContext(valueBefore);
       const wordRange = (word: string): vscode.Range => new vscode.Range(position.translate(0, -word.length), position);
 
@@ -472,7 +458,7 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
 
   // 4-3. 참조 프로바이더 (모델 속성 사용처 + Java 정의)
   const referenceProvider: vscode.ReferenceProvider = {
-    provideReferences: async (document, position) => {
+    provideReferences: (document, position) => {
       if (!isEnabled()) {
         return undefined;
       }
@@ -486,16 +472,14 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
       for (const attribute of resolution?.modelAttributes ?? []) {
         attribute.fsPath !== `` && locations.push(toLocation(attribute.fsPath, attribute.line, attribute.column, attribute.length));
       }
+      // 인덱스의 선계산 줄·열 사용 (사용처 파일을 문서로 열지 않음)
       const seen = new Set<string>();
-      const documents = new Map<string, vscode.TextDocument>();
+      const currentUri = document.uri.toString();
       for (const usage of templateIndex.attributeUsages(name)) {
-        const documentKey = usage.uri.toString();
-        const target = documents.get(documentKey) ?? await vscode.workspace.openTextDocument(usage.uri);
-        documents.set(documentKey, target);
         const key = `${usage.uri.toString()}:${usage.offset}`;
-        if (!seen.has(key)) {
+        if (!seen.has(key) && usage.uri.toString() !== currentUri) {
           seen.add(key);
-          locations.push(new vscode.Location(usage.uri, new vscode.Range(target.positionAt(usage.offset), target.positionAt(usage.offset + usage.length))));
+          locations.push(new vscode.Location(usage.uri, new vscode.Range(usage.line, usage.column, usage.line, usage.column + usage.length)));
         }
       }
       const localNodes = [...located.template.attributes.flatMap((attribute) => attribute.parsed.expressions), ...located.template.inlines.flatMap((inline) => inline.parsed.expressions)];
@@ -606,7 +590,7 @@ export const ThymeleafLanguageProvider = (templateIndex: TemplateIndexServiceTyp
     },
   };
 
-  const clearCache = (): void => cache.clear();
+  const clearCache = (): void => documentModels.clear();
 
   return { completionProvider, hoverProvider, definitionProvider, referenceProvider, signatureHelpProvider, documentLinkProvider, symbolProvider, resolveReferenceAt, clearCache };
 };

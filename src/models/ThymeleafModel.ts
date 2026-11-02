@@ -26,6 +26,12 @@ interface BracketFrameType {
   offset: number;
   kind: string;
 }
+interface InlineFinderType {
+  escapedAt: number;
+  escapedFrom: number;
+  unescapedAt: number;
+  unescapedFrom: number;
+}
 
 // 1. 라인 시작 오프셋 테이블 -----------------------------------------------------------
 export const buildLineStarts = (text: string): number[] => {
@@ -116,12 +122,21 @@ export const matchesGlob = (relativePath: string, globs: string[]): boolean => {
   return globs.some((glob) => globToRegExp(glob.replace(/^\/+/, ``)).test(normalized));
 };
 
-// 4. 인라인 표현식 스캔 ----------------------------------------------------------------
-const scanInlines = (text: string, start: number, end: number, scriptMode: boolean, elementIndex: number, inlines: TemplateInlineType[]): void => {
+// 4. 인라인 표현식 스캔 (다음 출현 위치 캐시로 문서 전체 1회 탐색) -----------------------------------
+const scanInlines = (text: string, start: number, end: number, scriptMode: boolean, elementIndex: number, inlines: TemplateInlineType[], finder: InlineFinderType): void => {
   let cursor = start;
   while (cursor < end) {
-    const escapedAt = text.indexOf(`[[`, cursor);
-    const unescapedAt = text.indexOf(`[(`, cursor);
+    // 캐시가 cursor 이전을 가리킬 때만 재탐색 (-1 은 이후 출현 없음)
+    if (finder.escapedFrom > cursor || (finder.escapedAt >= 0 && finder.escapedAt < cursor)) {
+      finder.escapedAt = text.indexOf(`[[`, cursor);
+      finder.escapedFrom = cursor;
+    }
+    if (finder.unescapedFrom > cursor || (finder.unescapedAt >= 0 && finder.unescapedAt < cursor)) {
+      finder.unescapedAt = text.indexOf(`[(`, cursor);
+      finder.unescapedFrom = cursor;
+    }
+    const escapedAt = finder.escapedAt;
+    const unescapedAt = finder.unescapedAt;
     const candidates = [escapedAt, unescapedAt].filter((index) => index >= 0 && index < end);
     if (candidates.length === 0) {
       return;
@@ -183,15 +198,21 @@ export const parseTemplate = (text: string): TemplateModelType => {
   let hasNamespace = false;
   let cursor = 0;
   const length = text.length;
+  const finder: InlineFinderType = {
+    escapedAt: -1,
+    escapedFrom: Number.POSITIVE_INFINITY,
+    unescapedAt: -1,
+    unescapedFrom: Number.POSITIVE_INFINITY,
+  };
   const currentParent = (): number => openStack.at(-1)?.index ?? -1;
 
   while (cursor < length) {
     const lt = text.indexOf(`<`, cursor);
     if (lt < 0) {
-      scanInlines(text, cursor, length, false, currentParent(), inlines);
+      scanInlines(text, cursor, length, false, currentParent(), inlines, finder);
       break;
     }
-    scanInlines(text, cursor, lt, false, currentParent(), inlines);
+    scanInlines(text, cursor, lt, false, currentParent(), inlines, finder);
 
     // 주석·선언
     if (text.startsWith(`<!--`, lt)) {
@@ -335,7 +356,7 @@ export const parseTemplate = (text: string): TemplateModelType => {
       const closeMatch = closePattern.exec(text);
       const contentEnd = closeMatch ? closeMatch.index : length;
       const inlineMode = element.attributes.find((attribute) => attribute.prefix === `th` && attribute.name === `inline`)?.value.trim().toLowerCase();
-      (inlineMode === `javascript` || inlineMode === `css`) && scanInlines(text, pointer, contentEnd, true, element.index, inlines);
+      (inlineMode === `javascript` || inlineMode === `css`) && scanInlines(text, pointer, contentEnd, true, element.index, inlines, finder);
       cursor = contentEnd;
       continue;
     }
@@ -564,8 +585,10 @@ export const findAttributeAt = (template: TemplateModelType, offset: number): Te
 export const findInlineAt = (template: TemplateModelType, offset: number): TemplateInlineType | undefined => template.inlines.find((inline) => offset >= inline.offset && offset <= inline.offset + inline.length);
 
 // 15. 템플릿 분석 (파싱 + 구문 진단) ------------------------------------------------------
-export const analyzeTemplate = (text: string, options: AnalysisOptionsType = {}): TemplateAnalysisType => {
-  const template = parseTemplate(text);
+export const analyzeTemplate = (text: string, options: AnalysisOptionsType = {}): TemplateAnalysisType => analyzeParsedTemplate(parseTemplate(text), text, options);
+
+// 15-1. 파싱된 템플릿 구문 진단 (문서 캐시 재사용) ---------------------------------------------
+export const analyzeParsedTemplate = (template: TemplateModelType, text: string, options: AnalysisOptionsType = {}): TemplateAnalysisType => {
   const diagnostics: TemplateDiagnosticType[] = [];
   if (!template.isThymeleaf) {
     return { "template": template, "diagnostics": diagnostics };

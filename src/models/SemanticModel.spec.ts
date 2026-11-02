@@ -138,3 +138,30 @@ describe(`type helpers`, () => {
     expect(elementTypeOf(resolveTypeRef(parseTypeRef(`User`), index))).toBeUndefined();
   });
 });
+
+// 5. th:object 중첩·지역 변수 연쇄 ------------------------------------------------------------------
+describe(`nested objects and chained locals`, () => {
+  test(`resolves a nested th:object against the outer object without recursing forever`, () => {
+    const html = `<form th:object="\${user}"><div th:object="*{address}"><span th:text="*{city}"></span><span th:text="*{cty}"></span></div></form>`;
+
+    expect(codesOf(html)).toEqual([`thymeleaf-unknown-property`]);
+    expect(messagesOf(html)[0]).toContain(`property 'cty'`);
+  });
+
+  test(`reports a th:object selection without an outer object once`, () => {
+    expect(codesOf(`<div th:object="*{address}"><span th:text="*{city}"></span></div>`)).toEqual([`thymeleaf-selection-without-object`]);
+  });
+
+  test(`reports a selection expression without th:object once per expression`, () => {
+    expect(codesOf(`<p th:text="*{first + last}"></p>`)).toEqual([`thymeleaf-selection-without-object`]);
+  });
+
+  test(`types a th:with value that refers to an earlier assignment`, () => {
+    expect(codesOf(`<div th:with="u=\${user}, a=\${u.address}"><p th:text="\${a.cty}"></p></div>`)).toEqual([`thymeleaf-unknown-property`]);
+    expect(codesOf(`<div th:with="u=\${user}, a=\${u.address}"><p th:text="\${a.city}"></p></div>`)).toEqual([]);
+  });
+
+  test(`types a th:with value that refers to th:each on the same element`, () => {
+    expect(codesOf(`<li th:each="x : \${users}" th:with="a=\${x.address}"><span th:text="\${a.cty}"></span></li>`)).toEqual([`thymeleaf-unknown-property`]);
+  });
+});

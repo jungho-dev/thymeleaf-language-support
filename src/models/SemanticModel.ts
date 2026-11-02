@@ -10,6 +10,8 @@ const OBJECT_METHODS: ReadonlySet<string> = new Set([`toString`, `equals`, `hash
 const STAT_PROPERTIES: Readonly<Record<string, string>> = { "index": `Integer`, "count": `Integer`, "size": `Integer`, "current": `Object`, "even": `Boolean`, "odd": `Boolean`, "first": `Boolean`, "last": `Boolean` };
 const FRAGMENT_SELECTOR_NAME_PATTERN = /^[\w$-]+$/;
 const LINK_SKIP_PATTERN = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\?)/i;
+const MAX_RESOLVE_DEPTH = 8;
+const propertyCache = new WeakMap<JavaTypeType, TypePropertyType[]>();
 
 // 1. Java 타입 문자열 -> TypeRef -----------------------------------------------------------
 export const parseTypeRef = (typeName: string): TypeRefType => {
@@ -84,6 +86,11 @@ export const elementTypeOf = (resolved: ResolvedTypeType): TypeRefType | undefin
 
 // 4. 타입 프로퍼티 조회 (필드·getter·Lombok·record, 상속 포함) ---------------------------------------
 const propertyEntries = (type: JavaTypeType, fsPath: string): TypePropertyType[] => {
+  // 타입 객체는 재파싱 시 교체되므로 WeakMap 캐시가 자동 무효화됨
+  const cached = propertyCache.get(type);
+  if (cached) {
+    return cached;
+  }
   const entries: TypePropertyType[] = [];
   const seen = new Set<string>();
   const add = (entry: TypePropertyType): void => {
@@ -117,6 +124,7 @@ const propertyEntries = (type: JavaTypeType, fsPath: string): TypePropertyType[]
     add({ "name": `name`, "type": `String`, "fsPath": fsPath, "line": type.line, "offset": type.offset, "kind": `method` });
     add({ "name": `ordinal`, "type": `Integer`, "fsPath": fsPath, "line": type.line, "offset": type.offset, "kind": `method` });
   }
+  propertyCache.set(type, entries);
   return entries;
 };
 export const listProperties = (resolved: ResolvedTypeType, index: SemanticIndexType): TypePropertyType[] => {
@@ -170,7 +178,22 @@ const resolveLocalType = (local: LocalVariableType, scope: ScopeType, index: Sem
     return { "open": true };
   }
   const parentScope = scopes.get(template.elements[local.attribute.elementIndex]?.parent ?? -1) ?? { "locals": new Map(), "insideFragment": false };
-  const ownerScope: ScopeType = { "locals": new Map([...parentScope.locals].filter(([name]) => name !== local.name)), "objectAttribute": scope.objectAttribute, "insideFragment": scope.insideFragment };
+  const locals = new Map([...parentScope.locals].filter(([name]) => name !== local.name));
+
+  // th:with 는 같은 요소의 th:each 변수와 앞선 할당을 참조 가능 (자신과 이후 할당은 제외)
+  if (local.kind === `with`) {
+    const elementScope = scopes.get(local.attribute.elementIndex);
+    const assignments = local.attribute.parsed.assignments;
+    const ownIndex = assignments.findIndex((assignment) => assignment.expression === local.expression);
+    for (const [name, candidate] of elementScope?.locals ?? []) {
+      candidate.attribute !== local.attribute && locals.set(name, candidate);
+    }
+    for (const assignment of assignments.slice(0, Math.max(0, ownIndex))) {
+      locals.set(assignment.name, { "name": assignment.name, "kind": `with`, "attribute": local.attribute, "expression": assignment.expression });
+    }
+    locals.delete(local.name);
+  }
+  const ownerScope: ScopeType = { "locals": locals, "objectAttribute": scope.objectAttribute, "insideFragment": scope.insideFragment };
   const resolution = resolveChain(local.expression, local.expression.chains[0], ownerScope, index, options, template, scopes, depth + 1);
   const resolved = resolution?.segmentTypes.at(-1) ?? resolution?.rootType ?? { "open": true };
   if (local.kind === `each`) {
@@ -184,10 +207,20 @@ export const resolveChain = (node: ExpressionNodeType, chain: ExpressionChainTyp
     return undefined;
   }
   const resolution: SemanticResolutionType = { "node": node, "chain": chain, "rootKind": `other`, "rootType": { "open": true }, "segmentTypes": [], "segmentProperties": [] };
+  if (depth > MAX_RESOLVE_DEPTH) {
+    return resolution;
+  }
   const root = chain.root;
-  if (node.kind === `selection` && scope.objectAttribute) {
-    const objectNode = scope.objectAttribute.parsed.expressions[0];
-    const objectResolution = objectNode ? resolveChain(objectNode, objectNode.chains[0], scope, index, options, template, scopes, depth + 1) : undefined;
+
+  // th:object 자신의 값은 바깥 요소의 th:object 기준으로 해석 (자기 참조 무한 재귀 방지)
+  let objectAttribute = scope.objectAttribute;
+  if (objectAttribute?.parsed.expressions.includes(node)) {
+    objectAttribute = scopes.get(template.elements[objectAttribute.elementIndex]?.parent ?? -1)?.objectAttribute;
+  }
+  if (node.kind === `selection` && objectAttribute) {
+    const objectNode = objectAttribute.parsed.expressions[0];
+    const objectScope = scopes.get(objectAttribute.elementIndex) ?? scope;
+    const objectResolution = objectNode ? resolveChain(objectNode, objectNode.chains[0], objectScope, index, options, template, scopes, depth + 1) : undefined;
     const objectType = objectResolution?.segmentTypes.at(-1) ?? objectResolution?.rootType ?? { "open": true };
     resolution.rootKind = `object`;
     if (root.kind === `identifier`) {
@@ -283,6 +316,12 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
   };
 
   const analyzeNode = (node: ExpressionNodeType, scope: ScopeType, attribute?: TemplateAttributeType): void => {
+    // 선택 표현식 객체 존재 (노드당 1회, th:object 자신의 값은 바깥 객체 기준)
+    const objectAttribute = attribute !== undefined && scope.objectAttribute === attribute ? scopes.get(template.elements[attribute.elementIndex]?.parent ?? -1)?.objectAttribute : scope.objectAttribute;
+    if (options.modelValidation && node.kind === `selection` && node.chains.length > 0 && !objectAttribute && !scope.insideFragment) {
+      push(`thymeleaf-selection-without-object`, `Selection expression *{...} has no enclosing th:object.`, `warning`, node.offset, node.length);
+    }
+
     // 변수·선택 체인
     for (const chain of node.chains) {
       const chainScope = attribute && attribute.name === `each` && chain === node.chains[0] && node === attribute.parsed.eachIterable ? withoutEachLocals(scope, attribute) : scope;
@@ -293,9 +332,6 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
       resolutions.set(chain, resolution);
       if (!options.modelValidation) {
         continue;
-      }
-      if (node.kind === `selection` && !scope.objectAttribute && !scope.insideFragment) {
-        push(`thymeleaf-selection-without-object`, `Selection expression *{...} has no enclosing th:object.`, `warning`, node.offset, node.length);
       }
       const optional = node.kind !== `selection` && (chain.guarded === true || chain.segments[0]?.safe === true);
       if (resolution.rootKind === `unknown` && !optional) {

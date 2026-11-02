@@ -1,7 +1,7 @@
 // services/TemplateIndexService.ts
 
 import { TextDecoder, vscode } from "@exportLibs";
-import { matchesGlob, parseTemplate, templateNameFromPath } from "@exportModels";
+import { buildLineStarts, matchesGlob, offsetToPosition, parseTemplate, templateNameFromPath } from "@exportModels";
 import { logger } from "@exportScripts";
 import type { FragmentCatalogType, TemplateModelType, TextPositionType } from "@exportTypes";
 
@@ -15,17 +15,22 @@ const UPDATE_DEBOUNCE_MS = 300;
 const ID_SELECTOR_PATTERN = /^#([\w-]+)$/;
 const FRAGMENT_REF_NAMES: ReadonlySet<string> = new Set([`insert`, `replace`, `include`, `substituteby`, `decorate`, `decorator`]);
 
+// 인덱스는 AST 전체 대신 카탈로그·참조·루트 식별자 사용처만 보관 (메모리 절감)
 interface TemplateEntryType {
   name: string;
   uri: vscode.Uri;
-  template: TemplateModelType;
+  catalog: FragmentCatalogType;
   references: string[];
+  usages: AttributeUsageType[];
 }
 export interface AttributeUsageType {
   uri: vscode.Uri;
   templateName: string;
+  name: string;
   offset: number;
   length: number;
+  line: number;
+  column: number;
 }
 
 // ------------------------------------------------------------------------------
@@ -34,14 +39,17 @@ export interface AttributeUsageType {
 export const TemplateIndexService = () => {
   // 0. 변수 설정 ----------------------------------------------------------------------------
   const cache = new Map<string, vscode.Uri[]>();
-  const entries = new Map<string, TemplateEntryType>();
-  const byPath = new Map<string, string>();
+  let entries = new Map<string, TemplateEntryType>();
+  let byPath = new Map<string, string>();
   const includers = new Map<string, Set<string>>();
-  const staticPaths = new Map<string, vscode.Uri>();
+  let staticPaths = new Map<string, vscode.Uri>();
+  let usageIndex: Map<string, AttributeUsageType[]> | undefined;
   const emitter = new vscode.EventEmitter<void>();
   const decoder = new TextDecoder(`utf-8`);
   let ready = false;
   let updateTimer: NodeJS.Timeout | null = null;
+  let scanToken = 0;
+  let revisionCount = 0;
   const pending = new Map<string, vscode.Uri | undefined>();
 
   // 1-1. 설정 조회
@@ -57,39 +65,54 @@ export const TemplateIndexService = () => {
     const { searchExclude } = getConfig();
     return searchExclude.length > 0 ? `{${searchExclude.join(`,`)}}` : undefined;
   };
-  const isExcluded = (uri: vscode.Uri): boolean => matchesGlob(vscode.workspace.asRelativePath(uri, false), getConfig().searchExclude);
 
   // 1-2. 템플릿명 정규화·경로 변환
   const normalizeName = (name: string): string => name.trim().replace(/^\/+/, ``).replace(/\.html?$/i, ``);
   const templateNameOf = (uri: vscode.Uri): string | undefined => byPath.get(uri.fsPath) ?? templateNameFromPath(uri.fsPath, getConfig().templateGlobs);
 
-  // 1-3. 템플릿 파싱·등록
-  const collectReferences = (template: TemplateModelType): string[] => {
-    const names = new Set<string>();
-    for (const attribute of template.attributes) {
-      if (!FRAGMENT_REF_NAMES.has(attribute.name)) {
-        continue;
-      }
-      for (const node of attribute.parsed.expressions) {
-        node.kind === `fragment` && node.template && !node.template.dynamic && node.template.value !== `` && node.template.value !== `this` && names.add(normalizeName(node.template.value));
-      }
-    }
-    return [...names];
-  };
-  const registerTemplate = (uri: vscode.Uri, text: string): void => {
+  // 1-3. 템플릿 파싱·경량 엔트리 등록 (대상 Map 지정: 스캔은 새 Map, 감시는 현재 Map)
+  const registerTemplate = (uri: vscode.Uri, text: string, targetEntries: Map<string, TemplateEntryType>, targetByPath: Map<string, string>): void => {
     const name = templateNameFromPath(uri.fsPath, getConfig().templateGlobs);
     if (!name) {
       return;
     }
 
     // 소스 경로 템플릿 우선
-    const existing = entries.get(name);
+    const existing = targetEntries.get(name);
     if (existing && existing.uri.fsPath !== uri.fsPath && SOURCE_PATH_PATTERN.test(existing.uri.fsPath) && !SOURCE_PATH_PATTERN.test(uri.fsPath)) {
       return;
     }
-    const template = parseTemplate(text);
-    entries.set(name, { "name": name, "uri": uri, "template": template, "references": collectReferences(template) });
-    byPath.set(uri.fsPath, name);
+    const template: TemplateModelType = parseTemplate(text);
+
+    // 프래그먼트 참조 템플릿명
+    const references = new Set<string>();
+    for (const attribute of template.attributes) {
+      if (!FRAGMENT_REF_NAMES.has(attribute.name)) {
+        continue;
+      }
+      for (const node of attribute.parsed.expressions) {
+        node.kind === `fragment` && node.template && !node.template.dynamic && node.template.value !== `` && node.template.value !== `this` && references.add(normalizeName(node.template.value));
+      }
+    }
+
+    // 루트 식별자 사용처 (줄·열 선계산으로 문서 열기 없이 위치 제공)
+    const lineStarts = buildLineStarts(text);
+    const usages: AttributeUsageType[] = [];
+    const nodes = [...template.attributes.flatMap((attribute) => attribute.parsed.expressions), ...template.inlines.flatMap((inline) => inline.parsed.expressions)];
+    for (const node of nodes) {
+      for (const chain of node.chains) {
+        if (chain.root.kind !== `identifier`) {
+          continue;
+        }
+        const position = offsetToPosition(lineStarts, chain.root.offset);
+        usages.push({ "uri": uri, "templateName": name, "name": chain.root.name, "offset": chain.root.offset, "length": chain.root.length, "line": position.line, "column": position.column });
+      }
+    }
+
+    // 같은 이름을 다른 파일이 대체하면 이전 경로 매핑 제거
+    existing && existing.uri.fsPath !== uri.fsPath && targetByPath.delete(existing.uri.fsPath);
+    targetEntries.set(name, { "name": name, "uri": uri, "catalog": { "fragments": template.fragments, "tagNames": template.tagNames, "ids": template.ids, "refs": template.refs }, "references": [...references], "usages": usages });
+    targetByPath.set(uri.fsPath, name);
   };
   const rebuildIncluders = (): void => {
     includers.clear();
@@ -100,10 +123,12 @@ export const TemplateIndexService = () => {
         includers.set(reference, set);
       }
     }
+    usageIndex = undefined;
+    revisionCount++;
   };
-  const indexTemplateUri = async (uri: vscode.Uri): Promise<void> => {
+  const indexTemplateUri = async (uri: vscode.Uri, targetEntries: Map<string, TemplateEntryType>, targetByPath: Map<string, string>): Promise<void> => {
     try {
-      registerTemplate(uri, decoder.decode(await vscode.workspace.fs.readFile(uri)));
+      registerTemplate(uri, decoder.decode(await vscode.workspace.fs.readFile(uri)), targetEntries, targetByPath);
     }
     catch (error) {
       logger(`warn`, `indexTemplateUri - ${uri.fsPath}: ${error}`);
@@ -121,13 +146,13 @@ export const TemplateIndexService = () => {
     return index < 0 ? undefined : normalized.slice(index + marker.length + 1);
   };
 
-  // 1-5. 전체 스캔
+  // 1-5. 전체 스캔 (새 Map 에 구성 후 교체, 늦게 끝난 이전 스캔은 폐기)
   const scan = async (): Promise<number> => {
+    const token = ++scanToken;
     const { templateGlobs, staticGlobs } = getConfig();
-    entries.clear();
-    byPath.clear();
-    staticPaths.clear();
-    cache.clear();
+    const nextEntries = new Map<string, TemplateEntryType>();
+    const nextByPath = new Map<string, string>();
+    const nextStatic = new Map<string, vscode.Uri>();
     const uris = new Map<string, vscode.Uri>();
     for (const glob of templateGlobs) {
       const prefix = glob.replace(/\/+$/, ``);
@@ -137,14 +162,22 @@ export const TemplateIndexService = () => {
     }
     const list = [...uris.values()];
     for (let start = 0; start < list.length; start += READ_CHUNK) {
-      await Promise.all(list.slice(start, start + READ_CHUNK).map(indexTemplateUri));
+      await Promise.all(list.slice(start, start + READ_CHUNK).map((uri) => indexTemplateUri(uri, nextEntries, nextByPath)));
     }
     for (const glob of staticGlobs) {
       for (const uri of await vscode.workspace.findFiles(glob, excludeGlob(), MAX_STATIC)) {
         const path = staticPathOf(uri.fsPath, glob);
-        path && staticPaths.set(path, uri);
+        path && nextStatic.set(path, uri);
       }
     }
+    if (token !== scanToken) {
+      logger(`debug`, `scan - superseded by a newer scan`);
+      return entries.size;
+    }
+    entries = nextEntries;
+    byPath = nextByPath;
+    staticPaths = nextStatic;
+    cache.clear();
     rebuildIncluders();
     ready = true;
     emitter.fire();
@@ -203,46 +236,36 @@ export const TemplateIndexService = () => {
     return best;
   };
 
-  // 1-8. 문서 내 프래그먼트 선택자 위치 탐색
+  // 1-8. 문서 내 프래그먼트 선택자 위치 탐색 (열린 문서는 편집 내용, 아니면 파일 내용, 문서 열기 없음)
   const findFragmentPosition = async (uri: vscode.Uri, selector: string): Promise<TextPositionType> => {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const text = document.getText();
     const trimmed = selector.trim();
     if (trimmed === ``) {
       return { "line": 0, "column": 0 };
     }
+    const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
+    const text = openDocument ? openDocument.getText() : decoder.decode(await vscode.workspace.fs.readFile(uri));
+    const lineStarts = buildLineStarts(text);
     const fragmentName = trimmed.split(`(`)[0].trim();
     const template = parseTemplate(text);
     const fragment = template.fragments.find((entry) => entry.name === fragmentName);
     if (fragment) {
-      const position = document.positionAt(fragment.offset);
-      return { "line": position.line, "column": position.character };
+      return offsetToPosition(lineStarts, fragment.offset);
     }
     const refAttribute = template.attributes.find((attribute) => attribute.prefix === `th` && attribute.name === `ref` && attribute.value.trim() === fragmentName);
     if (refAttribute) {
-      const position = document.positionAt(refAttribute.tagOffset);
-      return { "line": position.line, "column": position.character };
+      return offsetToPosition(lineStarts, refAttribute.tagOffset);
     }
     const idMatch = ID_SELECTOR_PATTERN.exec(trimmed);
-    const idPattern = idMatch ? new RegExp(`\\bid\\s*=\\s*["']${idMatch[1]}["']`) : /^(?!)/;
-    const found = idPattern.exec(text);
-    if (found) {
-      const position = document.positionAt(Math.max(0, text.lastIndexOf(`<`, found.index)));
-      return { "line": position.line, "column": position.character };
+    const idElement = idMatch ? template.elements.find((candidate) => candidate.id === idMatch[1]) : undefined;
+    if (idElement) {
+      return offsetToPosition(lineStarts, idElement.offset);
     }
     const element = template.elements.find((candidate) => candidate.tag.toLowerCase() === fragmentName.toLowerCase());
-    if (element) {
-      const position = document.positionAt(element.offset);
-      return { "line": position.line, "column": position.character };
-    }
-    return { "line": 0, "column": 0 };
+    return element ? offsetToPosition(lineStarts, element.offset) : { "line": 0, "column": 0 };
   };
 
   // 2-1. 조회 API
-  const fragmentCatalog = (templateName: string | undefined): FragmentCatalogType | undefined => {
-    const entry = templateName ? entries.get(normalizeName(templateName)) : undefined;
-    return entry ? { "fragments": entry.template.fragments, "tagNames": entry.template.tagNames, "ids": entry.template.ids, "refs": entry.template.refs } : undefined;
-  };
+  const fragmentCatalog = (templateName: string | undefined): FragmentCatalogType | undefined => (templateName ? entries.get(normalizeName(templateName))?.catalog : undefined);
   const includersOf = (templateName: string, depth = 3): string[] => {
     const visited = new Set<string>();
     const queue: { name: string; depth: number }[] = [{ "name": normalizeName(templateName), "depth": 0 }];
@@ -259,17 +282,20 @@ export const TemplateIndexService = () => {
   };
   const listTemplateNames = (): string[] => [...entries.keys()].sort();
   const templateUri = (templateName: string): vscode.Uri | undefined => entries.get(normalizeName(templateName))?.uri;
+
+  // 사용처 인덱스는 변경 후 첫 조회 때 1회 재구성
   const attributeUsages = (attributeName: string): AttributeUsageType[] => {
-    const usages: AttributeUsageType[] = [];
-    for (const entry of entries.values()) {
-      const nodes = [...entry.template.attributes.flatMap((attribute) => attribute.parsed.expressions), ...entry.template.inlines.flatMap((inline) => inline.parsed.expressions)];
-      for (const node of nodes) {
-        for (const chain of node.chains) {
-          chain.root.kind === `identifier` && chain.root.name === attributeName && usages.push({ "uri": entry.uri, "templateName": entry.name, "offset": chain.root.offset, "length": chain.root.length });
+    if (!usageIndex) {
+      usageIndex = new Map();
+      for (const entry of entries.values()) {
+        for (const usage of entry.usages) {
+          const usageList = usageIndex.get(usage.name) ?? [];
+          usageList.push(usage);
+          usageIndex.set(usage.name, usageList);
         }
       }
     }
-    return usages;
+    return usageIndex.get(attributeName) ?? [];
   };
   const hasStatic = (): boolean => staticPaths.size > 0;
   const staticExists = (path: string): boolean => staticPaths.has(path.split(/[?#]/)[0]);
@@ -277,10 +303,12 @@ export const TemplateIndexService = () => {
   const listStaticPaths = (): string[] => [...staticPaths.keys()].sort();
   const isReady = (): boolean => ready;
   const templateCount = (): number => entries.size;
+  const revision = (): number => revisionCount;
 
-  // 2-2. 감시 (html·정적 리소스)
+  // 2-2. 감시 (html·정적 리소스, 정적 경로는 확장자와 무관하게 정적 인덱스 갱신)
   const schedule = (uri: vscode.Uri, removed: boolean): void => {
-    if (isExcluded(uri)) {
+    const { searchExclude } = getConfig();
+    if (matchesGlob(vscode.workspace.asRelativePath(uri, false), searchExclude)) {
       return;
     }
     pending.set(uri.fsPath, removed ? undefined : uri);
@@ -292,18 +320,22 @@ export const TemplateIndexService = () => {
       pending.clear();
       const { staticGlobs } = getConfig();
       Promise.all(work.map(async ([fsPath, target]) => {
-        const staticPath = staticGlobs.map((glob) => staticPathOf(fsPath, glob)).find((path) => path !== undefined);
-        if (staticPath && !fsPath.endsWith(`.html`)) {
+        const relativePath = vscode.workspace.asRelativePath(vscode.Uri.file(fsPath), false);
+        const staticGlob = staticGlobs.find((glob) => matchesGlob(relativePath, [glob]));
+        const staticPath = staticGlob ? staticPathOf(fsPath, staticGlob) : undefined;
+        if (staticPath) {
           target ? staticPaths.set(staticPath, target) : staticPaths.delete(staticPath);
+        }
+        if (!/\.html?$/i.test(fsPath)) {
           return;
         }
-        if (!target) {
-          const name = byPath.get(fsPath);
-          name && entries.delete(name);
-          byPath.delete(fsPath);
+        if (target) {
+          await indexTemplateUri(target, entries, byPath);
           return;
         }
-        await indexTemplateUri(target);
+        const name = byPath.get(fsPath);
+        name && entries.get(name)?.uri.fsPath === fsPath && entries.delete(name);
+        byPath.delete(fsPath);
       })).then(() => {
         rebuildIncluders();
         emitter.fire();
@@ -329,8 +361,12 @@ export const TemplateIndexService = () => {
     updateTimer && clearTimeout(updateTimer);
     cache.clear();
     entries.clear();
+    byPath.clear();
+    staticPaths.clear();
+    includers.clear();
+    usageIndex = undefined;
     emitter.dispose();
   };
 
-  return { scan, findTemplateFiles, resolveTemplate, findFragmentPosition, templateNameOf, fragmentCatalog, includersOf, listTemplateNames, templateUri, attributeUsages, hasStatic, staticExists, staticUri, listStaticPaths, isReady, templateCount, "onDidUpdate": emitter.event, watch, clear, dispose };
+  return { scan, findTemplateFiles, resolveTemplate, findFragmentPosition, templateNameOf, fragmentCatalog, includersOf, listTemplateNames, templateUri, attributeUsages, hasStatic, staticExists, staticUri, listStaticPaths, isReady, templateCount, revision, "onDidUpdate": emitter.event, watch, clear, dispose };
 };

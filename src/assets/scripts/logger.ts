@@ -49,6 +49,7 @@ const LOG_CONFIG = {
 type LogType = Exclude<keyof typeof LOG_LEVEL_MAP, `off`>;
 
 let otptChnn: vscode.OutputChannel | null = null;
+let cnfgLstn: vscode.Disposable | null = null;
 let cchdLvl: number | null = null;
 
 // 1. Init logger ---------------------------------------------------------------
@@ -59,11 +60,20 @@ export const initLogger = (): void => {
   otptChnn = vscode.window.createOutputChannel(MAIN);
 
   // 설정 변경 시 레벨 캐시 무효화
-  vscode.workspace.onDidChangeConfiguration((e) => {
+  cnfgLstn = vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration(`${MAIN}.logLevel`)) {
       cchdLvl = null;
     }
   });
+};
+
+// 1-1. Dispose logger -----------------------------------------------------------
+export const disposeLogger = (): void => {
+  cnfgLstn?.dispose();
+  cnfgLstn = null;
+  otptChnn?.dispose();
+  otptChnn = null;
+  cchdLvl = null;
 };
 
 // 2. Get log level ---------------------------------------------------------------

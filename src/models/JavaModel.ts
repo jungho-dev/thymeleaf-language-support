@@ -26,19 +26,23 @@ const COLLECTION_FACTORY_PATTERN = /^(List|Arrays|Collections|Set|Map|Stream)\s*
 
 // 1. 주석·문자열 마스킹 (오프셋 보존) ----------------------------------------------------------
 const maskSource = (text: string): { masked: string; structural: string } => {
-  const masked = text.split(``);
-  const structural = text.split(``);
+  const maskedParts: string[] = [];
+  const structuralParts: string[] = [];
   const size = text.length;
+  let copied = 0;
   let i = 0;
+
+  // 구간은 앞에서부터 단조 증가 순서로만 공백화
   const blank = (from: number, to: number, both: boolean): void => {
-    for (let k = from; k < to; k++) {
-      if (text[k] !== `\n` && text[k] !== `\r`) {
-        structural[k] = ` `;
-        if (both) {
-          masked[k] = ` `;
-        }
-      }
+    if (to <= from) {
+      return;
     }
+    const kept = text.slice(copied, from);
+    const original = text.slice(from, to);
+    const spaces = original.replace(/[^\r\n]/g, ` `);
+    maskedParts.push(kept, both ? spaces : original);
+    structuralParts.push(kept, spaces);
+    copied = to;
   };
   while (i < size) {
     const ch = text[i];
@@ -76,7 +80,9 @@ const maskSource = (text: string): { masked: string; structural: string } => {
     }
     i++;
   }
-  return { "masked": masked.join(``), "structural": structural.join(``) };
+  maskedParts.push(text.slice(copied));
+  structuralParts.push(text.slice(copied));
+  return { "masked": maskedParts.join(``), "structural": structuralParts.join(``) };
 };
 
 // 2. 선언 시작 경계 (괄호 밖의 ; { } 까지 역방향 탐색) ----------------------------------------------
@@ -197,38 +203,46 @@ const parseParams = (text: string): JavaParamType[] => splitTopLevel(text).map((
 
 // 7. 멤버 텍스트 (중첩 타입·메서드 본문 공백화) ---------------------------------------------------
 const blankBlocks = (text: string, from: number, to: number, ranges: [number, number][]): string => {
-  const chars = text.slice(from, to).split(``);
-  const blankRange = (start: number, stop: number): void => {
-    for (let k = Math.max(0, start); k < Math.min(stop, chars.length); k++) {
-      if (chars[k] !== `\n` && chars[k] !== `\r`) {
-        chars[k] = ` `;
+  const blankRanges = (source: string, targets: [number, number][]): string => {
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const [rangeStart, rangeEnd] of targets) {
+      const start = Math.max(cursor, rangeStart);
+      const stop = Math.min(source.length, rangeEnd);
+      if (start >= stop) {
+        continue;
       }
+      parts.push(source.slice(cursor, start), source.slice(start, stop).replace(/[^\r\n]/g, ` `));
+      cursor = stop;
     }
+    parts.push(source.slice(cursor));
+    return parts.join(``);
   };
+
   // 중첩 타입은 선언부까지 통째로 공백화
-  for (const [start, end] of ranges) {
-    blankRange(start - from, end - from);
-  }
+  const withoutNested = blankRanges(text.slice(from, to), ranges.map(([start, end]): [number, number] => [start - from, end - from]));
+
   // 메서드·초기화 블록은 중괄호를 남기고 내부만 공백화
+  const blocks: [number, number][] = [];
   let depth = 0;
   let blockStart = -1;
-  for (let i = 0; i < chars.length; i++) {
-    if (chars[i] === `{`) {
+  for (let i = 0; i < withoutNested.length; i++) {
+    if (withoutNested[i] === `{`) {
       if (depth === 0) {
         blockStart = i;
       }
       depth++;
     }
-    else if (chars[i] === `}`) {
+    else if (withoutNested[i] === `}`) {
       depth--;
       if (depth === 0 && blockStart >= 0) {
-        blankRange(blockStart + 1, i);
+        blocks.push([blockStart + 1, i]);
         blockStart = -1;
       }
     }
   }
-  blockStart >= 0 && blankRange(blockStart + 1, chars.length);
-  return chars.join(``);
+  blockStart >= 0 && blocks.push([blockStart + 1, withoutNested.length]);
+  return blankRanges(withoutNested, blocks);
 };
 
 // 8. Java 파일 파싱 --------------------------------------------------------------------------

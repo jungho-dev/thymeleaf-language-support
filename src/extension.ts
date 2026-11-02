@@ -3,9 +3,9 @@
 import { ThymeleafCommand } from "@exportCommands";
 import { vscode } from "@exportLibs";
 import { JavaViewProvider, ThymeleafDiagnosticProvider, ThymeleafLanguageProvider } from "@exportProviders";
-import { initLogger, logger } from "@exportScripts";
-import { JavaIndexService, MessageIndexService, SemanticIndexService, TemplateIndexService } from "@exportServices";
-import type { JavaIndexServiceType, JavaViewProviderType, MessageIndexServiceType, TemplateIndexServiceType, ThymeleafDiagnosticProviderType, ThymeleafLanguageProviderType } from "@exportTypes";
+import { disposeLogger, initLogger, logger } from "@exportScripts";
+import { DocumentModelService, JavaIndexService, MessageIndexService, SemanticIndexService, TemplateIndexService } from "@exportServices";
+import type { DocumentModelServiceType, JavaIndexServiceType, JavaViewProviderType, MessageIndexServiceType, TemplateIndexServiceType, ThymeleafDiagnosticProviderType } from "@exportTypes";
 
 const MAIN = `Thymeleaf-Language-Support`;
 const CHANGE_DEBOUNCE_MS = 300;
@@ -14,19 +14,24 @@ const HTML_SELECTOR: vscode.DocumentSelector = { "language": `html` };
 const JAVA_SELECTOR: vscode.DocumentSelector = { "language": `java` };
 
 // 1-1. deactivate
-export const deactivate = () => {};
+export const deactivate = () => {
+  disposeLogger();
+};
 
 // 1-2. activate
 export const activate = (context: vscode.ExtensionContext) => {
   initLogger();
   logger(`info`, `Thymeleaf-Language-Support is now active!`);
 
+  // Java·메시지 인덱스는 템플릿이 있을 때만 구성 (Thymeleaf 없는 Java 프로젝트의 자원 낭비 방지)
   const templateIndex = TemplateIndexService();
-  const javaIndex = JavaIndexService();
-  const messageIndex = MessageIndexService();
+  const hasTemplates = (): boolean => templateIndex.templateCount() > 0;
+  const javaIndex = JavaIndexService(hasTemplates);
+  const messageIndex = MessageIndexService(hasTemplates);
+  const documentModels = DocumentModelService();
   const semanticIndex = SemanticIndexService(javaIndex, messageIndex, templateIndex);
-  const diagnosticProvider = ThymeleafDiagnosticProvider(templateIndex, javaIndex, semanticIndex);
-  const languageProvider = ThymeleafLanguageProvider(templateIndex, javaIndex, messageIndex, semanticIndex);
+  const diagnosticProvider = ThymeleafDiagnosticProvider(templateIndex, javaIndex, semanticIndex, documentModels);
+  const languageProvider = ThymeleafLanguageProvider(templateIndex, javaIndex, messageIndex, semanticIndex, documentModels);
   const javaViewProvider = JavaViewProvider(templateIndex);
   const commandManager = ThymeleafCommand({ templateIndex, javaIndex, messageIndex, diagnosticProvider, languageProvider, javaViewProvider });
 
@@ -47,13 +52,11 @@ export const activate = (context: vscode.ExtensionContext) => {
   const watchers = [templateIndex.watch(), javaIndex.watch(), messageIndex.watch()];
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   statusBar.command = `${MAIN}.openLogOutput`;
-  const listeners = setupListeners(diagnosticProvider, javaViewProvider, languageProvider, templateIndex, javaIndex, messageIndex, statusBar);
+  const listeners = setupListeners(diagnosticProvider, javaViewProvider, documentModels, templateIndex, javaIndex, messageIndex, statusBar);
 
-  // 초기 인덱싱 후 열린 문서 진단
-  Promise.all([templateIndex.scan(), javaIndex.scan(), messageIndex.scan()]).then(async ([templates, javaFiles, messages]) => {
+  // 초기 인덱싱 (열린 문서 재진단은 인덱스 갱신 이벤트의 refresh 가 1회 수행)
+  scanIndexes(templateIndex, javaIndex, messageIndex).then(([templates, javaFiles, messages]) => {
     logger(`info`, `activate - ${templates} templates, ${javaFiles} Java files, ${messages} message keys indexed`);
-    await diagnosticProvider.applyOpenDocuments();
-    await javaViewProvider.applyOpenDocuments();
     updateStatusBar(statusBar, templateIndex, javaIndex, messageIndex);
   }).catch((error) => {
     logger(`error`, `activate - initial indexing failed: ${error}`);
@@ -74,7 +77,14 @@ export const activate = (context: vscode.ExtensionContext) => {
   });
 };
 
-// 1-3. 상태바 갱신
+// 1-3. 인덱스 스캔 (템플릿 먼저: Java·메시지 인덱싱 여부가 템플릿 존재에 의존)
+const scanIndexes = async (templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType): Promise<[number, number, number]> => {
+  const templates = await templateIndex.scan();
+  const [javaFiles, messages] = await Promise.all([javaIndex.scan(), messageIndex.scan()]);
+  return [templates, javaFiles, messages];
+};
+
+// 1-4. 상태바 갱신
 const updateStatusBar = (statusBar: vscode.StatusBarItem, templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType): void => {
   const editor = vscode.window.activeTextEditor;
   const languageId = editor?.document.languageId;
@@ -84,12 +94,12 @@ const updateStatusBar = (statusBar: vscode.StatusBarItem, templateIndex: Templat
   }
   const scanning = javaIndex.isScanning() || !templateIndex.isReady();
   statusBar.text = scanning ? `$(sync~spin) Thymeleaf` : `$(symbol-structure) Thymeleaf`;
-  statusBar.tooltip = [`Thymeleaf-Language-Support`, `templates: ${templateIndex.templateCount()}`, `controllers: ${javaIndex.controllerCount()} (${javaIndex.fileCount()} Java files)`, `message keys: ${messageIndex.listKeys().length} (${messageIndex.fileCount()} files)`, `click to open the output channel`].join(`\n`);
+  statusBar.tooltip = [`Thymeleaf-Language-Support`, `templates: ${templateIndex.templateCount()}`, `controllers: ${javaIndex.controllerCount()} (${javaIndex.fileCount()} Java files)`, `message keys: ${messageIndex.keyCount()} (${messageIndex.fileCount()} files)`, `click to open the output channel`].join(`\n`);
   statusBar.show();
 };
 
-// 1-4. 문서·설정·인덱스 리스너
-const setupListeners = (diagnosticProvider: ThymeleafDiagnosticProviderType, javaViewProvider: JavaViewProviderType, languageProvider: ThymeleafLanguageProviderType, templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType, statusBar: vscode.StatusBarItem): vscode.Disposable[] => {
+// 1-5. 문서·설정·인덱스 리스너
+const setupListeners = (diagnosticProvider: ThymeleafDiagnosticProviderType, javaViewProvider: JavaViewProviderType, documentModels: DocumentModelServiceType, templateIndex: TemplateIndexServiceType, javaIndex: JavaIndexServiceType, messageIndex: MessageIndexServiceType, statusBar: vscode.StatusBarItem): vscode.Disposable[] => {
   const timers = new Map<string, NodeJS.Timeout>();
   let refreshTimer: NodeJS.Timeout | null = null;
   const applyDocument = (document: vscode.TextDocument): void => {
@@ -102,7 +112,6 @@ const setupListeners = (diagnosticProvider: ThymeleafDiagnosticProviderType, jav
     refreshTimer && clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
-      languageProvider.clearCache();
       javaViewProvider.refreshLenses();
       updateStatusBar(statusBar, templateIndex, javaIndex, messageIndex);
       Promise.all([diagnosticProvider.applyOpenDocuments(), javaViewProvider.applyOpenDocuments()]).catch((error) => {
@@ -131,6 +140,7 @@ const setupListeners = (diagnosticProvider: ThymeleafDiagnosticProviderType, jav
     timers.delete(key);
     diagnosticProvider.clear(document);
     javaViewProvider.clear(document);
+    documentModels.evictDocument(document.uri);
   });
   const editorListener = vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar(statusBar, templateIndex, javaIndex, messageIndex));
   const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -139,11 +149,22 @@ const setupListeners = (diagnosticProvider: ThymeleafDiagnosticProviderType, jav
     }
     logger(`debug`, `activate - configuration changed`);
     const needsRescan = [`templateGlobs`, `staticGlobs`, `javaGlobs`, `javaEnabled`, `messageGlobs`, `searchExclude`].some((key) => e.affectsConfiguration(`${MAIN}.${key}`));
-    needsRescan ? Promise.all([templateIndex.scan(), javaIndex.scan(), messageIndex.scan()]).then(refreshAll).catch((error) => {
+    needsRescan ? scanIndexes(templateIndex, javaIndex, messageIndex).then(refreshAll).catch((error) => {
           logger(`error`, `config - rescan failed: ${error}`);
         }) : refreshAll();
   });
-  const indexListeners = [templateIndex.onDidUpdate(refreshAll), javaIndex.onDidUpdate(refreshAll), messageIndex.onDidUpdate(refreshAll)];
+  // 템플릿이 처음 생기면 건너뛴 Java·메시지 인덱스를 스캔
+  const templateListener = templateIndex.onDidUpdate(() => {
+    refreshAll();
+    if (templateIndex.templateCount() === 0) {
+      return;
+    }
+    const skippedScans = [javaIndex.isSkipped() ? javaIndex.scan() : undefined, messageIndex.isSkipped() ? messageIndex.scan() : undefined].filter((task) => task !== undefined);
+    skippedScans.length > 0 && Promise.all(skippedScans).catch((error) => {
+      logger(`error`, `templates - deferred scan failed: ${error}`);
+    });
+  });
+  const indexListeners = [templateListener, javaIndex.onDidUpdate(refreshAll), messageIndex.onDidUpdate(refreshAll)];
   const timerCleanup: vscode.Disposable = {
     dispose: () => {
       for (const pending of timers.values()) {

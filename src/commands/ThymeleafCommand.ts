@@ -60,7 +60,8 @@ export const ThymeleafCommand = (deps: CommandDepsType) => {
   // 1-4. 인덱스 재구성
   const rebuildIndex = async (): Promise<void> => {
     await vscode.window.withProgress({ "location": vscode.ProgressLocation.Window, "title": `Thymeleaf: rebuilding index` }, async () => {
-      const [templates, javaFiles, messages] = await Promise.all([deps.templateIndex.scan(), deps.javaIndex.scan(), deps.messageIndex.scan()]);
+      const templates = await deps.templateIndex.scan();
+      const [javaFiles, messages] = await Promise.all([deps.javaIndex.scan(), deps.messageIndex.scan()]);
       deps.languageProvider.clearCache();
       await deps.diagnosticProvider.applyOpenDocuments();
       await deps.javaViewProvider.applyOpenDocuments();

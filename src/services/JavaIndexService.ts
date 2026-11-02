@@ -25,9 +25,9 @@ interface UrlEntryType {
 // ------------------------------------------------------------------------------
 // 1. Java 소스 인덱스 (컨트롤러·뷰·모델 속성·클래스)
 // ------------------------------------------------------------------------------
-export const JavaIndexService = () => {
+export const JavaIndexService = (isWanted: () => boolean = () => true) => {
   // 0. 변수 설정 ----------------------------------------------------------------------------
-  const files = new Map<string, JavaFileType>();
+  let files = new Map<string, JavaFileType>();
   const typeIndex = new Map<string, { type: JavaTypeType; fsPath: string }[]>();
   const viewIndex = new Map<string, HandlerRefType[]>();
   const urlIndex: UrlEntryType[] = [];
@@ -37,8 +37,12 @@ export const JavaIndexService = () => {
   const decoder = new TextDecoder(`utf-8`);
   let ready = false;
   let scanning = false;
+  let skipped = false;
   let updateTimer: NodeJS.Timeout | null = null;
-  const pendingUpdates = new Set<string>();
+  let scanToken = 0;
+  let revisionCount = 0;
+  let controllerTotal = 0;
+  const pendingUpdates = new Map<string, boolean>();
 
   // 1-1. 설정 조회
   const getConfig = () => {
@@ -57,9 +61,6 @@ export const JavaIndexService = () => {
   // 1-2. 파일 읽기·파싱
   const readText = async (uri: vscode.Uri): Promise<string> => decoder.decode(await vscode.workspace.fs.readFile(uri));
   const lookupType = (simpleName: string): JavaTypeType | undefined => typeIndex.get(simpleName)?.[0]?.type;
-  const indexFile = (file: JavaFileType): void => {
-    files.set(file.fsPath, file);
-  };
 
   // 1-3. 파생 인덱스 재구성
   const rebuildDerived = (): void => {
@@ -68,6 +69,8 @@ export const JavaIndexService = () => {
     urlIndex.length = 0;
     globalTypes.length = 0;
     flashNames.clear();
+    controllerTotal = 0;
+    revisionCount++;
     for (const file of files.values()) {
       const isTest = /[\\/](test|tests)[\\/]/.test(file.fsPath);
       for (const type of file.types) {
@@ -75,6 +78,7 @@ export const JavaIndexService = () => {
         isTest ? entries.push({ "type": type, "fsPath": file.fsPath }) : entries.unshift({ "type": type, "fsPath": file.fsPath });
         typeIndex.set(type.name, entries);
         (type.isControllerAdvice || type.isInterceptor) && globalTypes.push(type);
+        (type.isController || type.isRestController) && controllerTotal++;
         for (const flash of type.flashAttributes) {
           const list = flashNames.get(flash.name) ?? [];
           list.push(flash);
@@ -97,70 +101,97 @@ export const JavaIndexService = () => {
     }
   };
 
-  // 1-4. 전체 스캔
+  // 1-4. 전체 스캔 (새 Map 에 구성 후 교체, 늦게 끝난 이전 스캔은 폐기)
   const scan = async (): Promise<number> => {
+    const token = ++scanToken;
     const config = getConfig();
-    files.clear();
-    if (!config.enabled) {
+    if (!config.enabled || !isWanted()) {
+      skipped = config.enabled;
+      scanning = false;
+      files = new Map();
       rebuildDerived();
       ready = true;
       emitter.fire();
+      config.enabled && logger(`info`, `scan - skipped (no Thymeleaf templates indexed)`);
       return 0;
     }
+    skipped = false;
     scanning = true;
-    const uris = new Map<string, vscode.Uri>();
-    for (const glob of config.javaGlobs) {
-      for (const uri of await vscode.workspace.findFiles(glob, excludeGlob(), MAX_JAVA_FILES)) {
-        uris.set(uri.fsPath, uri);
+    try {
+      const uris = new Map<string, vscode.Uri>();
+      for (const glob of config.javaGlobs) {
+        for (const uri of await vscode.workspace.findFiles(glob, excludeGlob(), MAX_JAVA_FILES)) {
+          uris.set(uri.fsPath, uri);
+        }
       }
+      const nextFiles = new Map<string, JavaFileType>();
+      const parsedTexts: { file: JavaFileType; text: string }[] = [];
+      const list = [...uris.values()];
+      for (let start = 0; start < list.length; start += PARSE_CHUNK) {
+        const chunk = list.slice(start, start + PARSE_CHUNK);
+        const results = await Promise.all(chunk.map(async (uri) => {
+          try {
+            const text = await readText(uri);
+            return { "file": parseJavaFile(text, uri.fsPath), "text": text };
+          }
+          catch (error) {
+            logger(`warn`, `scan - failed to parse ${uri.fsPath}: ${error}`);
+            return undefined;
+          }
+        }));
+        for (const entry of results) {
+          if (entry) {
+            nextFiles.set(entry.file.fsPath, entry.file);
+            entry.file.types.some(isModelSource) && parsedTexts.push(entry);
+          }
+        }
+      }
+      if (token !== scanToken) {
+        logger(`debug`, `scan - superseded by a newer scan`);
+        return files.size;
+      }
+      files = nextFiles;
+      rebuildDerived();
+      for (const entry of parsedTexts) {
+        resolveAttributeTypes(entry.file, entry.text, lookupType);
+      }
+      ready = true;
+      emitter.fire();
+      logger(`info`, `scan - ${files.size} Java files indexed (${viewIndex.size} views, ${urlIndex.length} url patterns)`);
+      return files.size;
     }
+    finally {
+      token === scanToken && (scanning = false);
+    }
+  };
+
+  // 1-5. 변경 파일 일괄 갱신 (파생 인덱스는 배치당 1회 재구성)
+  const applyUpdates = async (updates: [string, boolean][]): Promise<void> => {
     const parsedTexts: { file: JavaFileType; text: string }[] = [];
-    const list = [...uris.values()];
-    for (let start = 0; start < list.length; start += PARSE_CHUNK) {
-      const chunk = list.slice(start, start + PARSE_CHUNK);
-      const results = await Promise.all(chunk.map(async (uri) => {
+    for (let start = 0; start < updates.length; start += PARSE_CHUNK) {
+      await Promise.all(updates.slice(start, start + PARSE_CHUNK).map(async ([fsPath, removed]) => {
+        if (removed) {
+          files.delete(fsPath);
+          return;
+        }
         try {
-          const text = await readText(uri);
-          return { "file": parseJavaFile(text, uri.fsPath), "text": text };
+          const text = await readText(vscode.Uri.file(fsPath));
+          const file = parseJavaFile(text, fsPath);
+          files.set(fsPath, file);
+          file.types.some(isModelSource) && parsedTexts.push({ "file": file, "text": text });
         }
         catch (error) {
-          logger(`warn`, `scan - failed to parse ${uri.fsPath}: ${error}`);
-          return undefined;
+          logger(`warn`, `applyUpdates - ${fsPath}: ${error}`);
         }
       }));
-      for (const entry of results) {
-        if (entry) {
-          indexFile(entry.file);
-          entry.file.types.some(isModelSource) && parsedTexts.push(entry);
-        }
-      }
     }
     rebuildDerived();
     for (const entry of parsedTexts) {
       resolveAttributeTypes(entry.file, entry.text, lookupType);
     }
-    scanning = false;
-    ready = true;
-    emitter.fire();
-    logger(`info`, `scan - ${files.size} Java files indexed (${viewIndex.size} views, ${urlIndex.length} url patterns)`);
-    return files.size;
   };
-
-  // 1-5. 단일 파일 갱신
   const updateFile = async (uri: vscode.Uri): Promise<void> => {
-    try {
-      const text = await readText(uri);
-      const file = parseJavaFile(text, uri.fsPath);
-      indexFile(file);
-      rebuildDerived();
-      resolveAttributeTypes(file, text, lookupType);
-    }
-    catch (error) {
-      logger(`warn`, `updateFile - ${uri.fsPath}: ${error}`);
-    }
-  };
-  const removeFile = (uri: vscode.Uri): void => {
-    files.delete(uri.fsPath) && rebuildDerived();
+    await applyUpdates([[uri.fsPath, false]]);
   };
   const isIndexTarget = (uri: vscode.Uri): boolean => {
     const { enabled, javaGlobs, searchExclude } = getConfig();
@@ -168,16 +199,16 @@ export const JavaIndexService = () => {
     return enabled && matchesGlob(relativePath, javaGlobs) && !matchesGlob(relativePath, searchExclude);
   };
   const scheduleUpdate = (uri: vscode.Uri, removed: boolean): void => {
-    if (!files.has(uri.fsPath) && !isIndexTarget(uri)) {
+    if (skipped || (!files.has(uri.fsPath) && !isIndexTarget(uri))) {
       return;
     }
-    removed ? removeFile(uri) : pendingUpdates.add(uri.fsPath);
+    pendingUpdates.set(uri.fsPath, removed);
     updateTimer && clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
       updateTimer = null;
-      const paths = [...pendingUpdates];
+      const updates = [...pendingUpdates.entries()];
       pendingUpdates.clear();
-      Promise.all(paths.map((fsPath) => updateFile(vscode.Uri.file(fsPath)))).then(() => emitter.fire()).catch((error) => {
+      applyUpdates(updates).then(() => emitter.fire()).catch((error) => {
         logger(`error`, `scheduleUpdate - ${error}`);
       });
     }, UPDATE_DEBOUNCE_MS);
@@ -244,8 +275,10 @@ export const JavaIndexService = () => {
   const listViewNames = (): string[] => [...viewIndex.keys()].sort();
   const isReady = (): boolean => ready;
   const isScanning = (): boolean => scanning;
+  const isSkipped = (): boolean => skipped;
   const fileCount = (): number => files.size;
-  const controllerCount = (): number => [...files.values()].reduce((count, file) => count + file.types.filter((type) => type.isController || type.isRestController).length, 0);
+  const controllerCount = (): number => controllerTotal;
+  const revision = (): number => revisionCount;
 
   // 2-3. 감시·해제
   const watch = (): vscode.Disposable => {
@@ -262,5 +295,5 @@ export const JavaIndexService = () => {
     emitter.dispose();
   };
 
-  return { scan, updateFile, modelContextFor, resolveJavaType, viewRefs, hasLinks, linkExists, findHandlersForPath, listUrls, listViewNames, isReady, isScanning, fileCount, controllerCount, "onDidUpdate": emitter.event, watch, dispose };
+  return { scan, updateFile, modelContextFor, resolveJavaType, viewRefs, hasLinks, linkExists, findHandlersForPath, listUrls, listViewNames, isReady, isScanning, isSkipped, fileCount, controllerCount, revision, "onDidUpdate": emitter.event, watch, dispose };
 };

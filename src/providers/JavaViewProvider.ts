@@ -28,6 +28,9 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
   const isLensEnabled = (): boolean => vscode.workspace.getConfiguration(MAIN).get<boolean>(`codeLensEnabled`, true);
   const isTarget = (document: vscode.TextDocument): boolean => document.languageId === `java` && document.uri.scheme !== `git`;
 
+  // 템플릿이 하나도 없으면 Thymeleaf 프로젝트가 아님 (JSP 등 다른 뷰 기술의 거짓 경고 방지)
+  const hasTemplates = (): boolean => templateIndex.isReady() && templateIndex.templateCount() > 0;
+
   // 1-2. 문서 파싱 캐시
   const parseDocument = (document: vscode.TextDocument): JavaFileType => {
     const key = document.uri.toString();
@@ -45,23 +48,16 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
   const viewAt = (file: JavaFileType, offset: number): JavaViewNameType | undefined => controllersOf(file).flatMap((type) => type.handlers.flatMap((handler) => handler.viewNames)).find((view) => !view.implicit && offset >= view.offset && offset <= view.offset + view.length);
   const attributeAt = (file: JavaFileType, offset: number): ModelAttributeType | undefined => controllersOf(file).flatMap((type) => [...type.classAttributes, ...type.modelAttributeMethods, ...type.flashAttributes]).find((attribute) => attribute.source !== `param` && attribute.source !== `modelAttributeMethod` && offset >= attribute.offset && offset <= attribute.offset + attribute.length);
 
-  // 1-4. 사용처 위치 (문서 열어 오프셋 변환)
-  const resolveUsageLocations = async (name: string): Promise<vscode.Location[]> => {
-    const usages = templateIndex.attributeUsages(name);
-    const documents = new Map<string, vscode.TextDocument>();
-    const locations: vscode.Location[] = [];
-    for (const usage of usages) {
-      const key = usage.uri.toString();
-      const document = documents.get(key) ?? await vscode.workspace.openTextDocument(usage.uri);
-      documents.set(key, document);
-      locations.push(new vscode.Location(usage.uri, new vscode.Range(document.positionAt(usage.offset), document.positionAt(usage.offset + usage.length))));
-    }
-    return locations;
-  };
+  // 1-4. 사용처 위치 (인덱스의 선계산 줄·열 사용, 문서 열기 없음)
+  const resolveUsageLocations = (name: string): vscode.Location[] => templateIndex.attributeUsages(name).map((usage) => new vscode.Location(usage.uri, new vscode.Range(usage.line, usage.column, usage.line, usage.column + usage.length)));
 
   // 2-1. 뷰 템플릿 존재 진단
   const apply = async (document: vscode.TextDocument): Promise<void> => {
-    if (!isTarget(document) || !isEnabled()) {
+    if (!isTarget(document)) {
+      return;
+    }
+    if (!isEnabled() || !hasTemplates()) {
+      collection.delete(document.uri);
       return;
     }
     const version = document.version;
@@ -89,7 +85,6 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
       return;
     }
     collection.set(document.uri, diagnostics);
-    lensEmitter.fire();
   };
   const applyOpenDocuments = async (): Promise<void> => {
     await Promise.all(vscode.workspace.textDocuments.filter(isTarget).map((document) => apply(document)));
@@ -103,7 +98,7 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
   const codeLensProvider: vscode.CodeLensProvider = {
     "onDidChangeCodeLenses": lensEmitter.event,
     provideCodeLenses: (document) => {
-      if (!isEnabled() || !isLensEnabled()) {
+      if (!isEnabled() || !isLensEnabled() || !hasTemplates()) {
         return [];
       }
       const file = parseDocument(document);
@@ -153,7 +148,7 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
 
   // 2-4. 참조 (속성 리터럴 -> 템플릿 사용처)
   const referenceProvider: vscode.ReferenceProvider = {
-    provideReferences: async (document, position) => {
+    provideReferences: (document, position) => {
       if (!isEnabled()) {
         return undefined;
       }
@@ -185,7 +180,7 @@ export const JavaViewProvider = (templateIndex: TemplateIndexServiceType) => {
 
   // 2-6. 사용처 표시 명령
   const showAttributeUsages = async (uri: vscode.Uri, position: vscode.Position, name: string): Promise<void> => {
-    const locations = await resolveUsageLocations(name);
+    const locations = resolveUsageLocations(name);
     logger(`debug`, `showAttributeUsages - ${name}: ${locations.length}`);
     await vscode.commands.executeCommand(`editor.action.showReferences`, uri, position, locations);
   };

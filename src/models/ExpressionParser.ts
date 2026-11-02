@@ -310,7 +310,8 @@ class ExpressionScanner {
     const sub = new ExpressionScanner(inner);
     sub.parseStandard(``);
     for (const node of sub.nodes) {
-      this.nodes.push(shiftNode(node, this.pos));
+      shiftNode(node, this.pos);
+      this.nodes.push(node);
     }
     this.pos = end + 2;
   }
@@ -844,23 +845,24 @@ class ExpressionScanner {
   }
 }
 
-// 5. 노드 오프셋 이동 ---------------------------------------------------------------------
-const shiftNode = (node: ExpressionNodeType, delta: number): ExpressionNodeType => ({
-  ...node,
-  "offset": node.offset + delta,
-  "innerOffset": node.innerOffset + delta,
-  "argsOffset": node.argsOffset < 0 ? -1 : node.argsOffset + delta,
-  "chains": node.chains.map((chain) => ({
-    ...chain,
-    "root": { ...chain.root, "offset": chain.root.offset + delta },
-    "segments": chain.segments.map((segment) => ({ ...segment, "offset": segment.offset + delta })),
-  })),
-  "key": node.key ? { ...node.key, "offset": node.key.offset + delta } : undefined,
-  "path": node.path ? { ...node.path, "offset": node.path.offset + delta } : undefined,
-  "template": node.template ? { ...node.template, "offset": node.template.offset + delta } : undefined,
-  "selector": node.selector ? { ...node.selector, "offset": node.selector.offset + delta } : undefined,
-  "args": node.args.map((arg) => ({ ...arg, "offset": arg.offset + delta })),
-});
+// 5. 노드 오프셋 이동 (파서가 새로 만든 노드만 대상, 제자리 갱신) ----------------------------------------
+const shiftNode = (node: ExpressionNodeType, delta: number): void => {
+  node.offset += delta;
+  node.innerOffset += delta;
+  node.argsOffset = node.argsOffset < 0 ? -1 : node.argsOffset + delta;
+  for (const chain of node.chains) {
+    chain.root.offset += delta;
+    for (const segment of chain.segments) {
+      segment.offset += delta;
+    }
+  }
+  for (const part of [node.key, node.path, node.template, node.selector]) {
+    part && (part.offset += delta);
+  }
+  for (const arg of node.args) {
+    arg.offset += delta;
+  }
+};
 
 // 6. 빈 파싱 결과 -----------------------------------------------------------------------
 export const emptyParsedValue = (): ParsedValueType => ({ "errors": [], "expressions": [], "eachVars": [], "assignments": [], "fragmentParams": [] });
@@ -962,9 +964,15 @@ export const parseAttributeValue = (value: string, kind: AttributeKindType, base
     }
     parsed.errors.push({ "code": `thymeleaf-expression-syntax`, "message": error.message, "severity": `error`, "offset": baseOffset + error.offset, "length": Math.max(1, error.length) });
   }
-  parsed.expressions = scanner.nodes.map((node) => (baseOffset === 0 ? node : shiftNode(node, baseOffset)));
-  parsed.eachIterable = parsed.eachIterable ? parsed.expressions[scanner.nodes.indexOf(parsed.eachIterable)] : undefined;
-  parsed.assignments = parsed.assignments.map((assignment) => ({ ...assignment, "offset": assignment.offset + baseOffset, "expression": assignment.expression ? parsed.expressions[scanner.nodes.indexOf(assignment.expression)] : undefined }));
+  if (baseOffset !== 0) {
+    for (const node of scanner.nodes) {
+      shiftNode(node, baseOffset);
+    }
+    for (const assignment of parsed.assignments) {
+      assignment.offset += baseOffset;
+    }
+  }
+  parsed.expressions = scanner.nodes;
   return parsed;
 };
 
