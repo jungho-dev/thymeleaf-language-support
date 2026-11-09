@@ -31,6 +31,20 @@
   quick start sections.
 - Fragments: `th:ref` markers resolve as fragment selectors (`~{:: name}`) in diagnostics, completion, and
   navigation; named arguments to a fragment without a signature are accepted as fragment-local variables.
+- Fragment arity: follows Thymeleaf `processParameters`; named arguments beside a signature
+  (`popup(ref1=..., popupId='x')`) are accepted as fragment-local variables instead of reported as unknown
+  parameters, and missing signature parameters, duplicate names, mixed named and positional arguments, and a
+  parameterized fragment selected without arguments are reported.
+- False positives: `~{}` empty fragments, HTML-entity operators (`&lt;`, `&gt;`, `&amp;&amp;`), SpEL unary
+  signs and hex literals, record accessor calls (`guide.sections()`), members of types with an external superclass
+  or a duplicated simple name, named arguments that call sites pass into a `th:fragment`, Spring request contexts, framework paths
+  (`/login`, `/logout`, `/error`, `/webjars/**`), and modern HTML attributes (`th:nonce`, `th:integrity`) are no
+  longer reported.
+- Java model: a handler that passes the model to another object or returns `new ModelAndView(view, map)` is
+  dynamic on its own (the class stays checked); `static final String` constants name attributes; servlet filters
+  (`OncePerRequestFilter`, `GenericFilterBean`, `HttpFilter`, or `Filter` imported from `javax`/`jakarta.servlet`)
+  are global request-attribute sources;
+  `return "main.html"` maps to the `main` template; interfaces keep every super-interface.
 - Model validation: roots on the left of an elvis `?:` or followed by `?.` no longer report an unknown model
   attribute.
 - Java: `@RestController` and `@ResponseBody` handlers index their URL paths without view names; array mapping
@@ -56,3 +70,7 @@
 ## \[ 1.1.2 \]
 
 - 2026-11-02T06:13:38.576Z
+
+## \[ 1.1.3 \]
+
+- 2026-11-09T07:51:14.618Z

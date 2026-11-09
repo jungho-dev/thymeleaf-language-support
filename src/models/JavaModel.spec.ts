@@ -312,3 +312,97 @@ public class MenuController {
     expect(byMethod.get(`ping`)).toEqual([]);
   });
 });
+
+// 5. 모델 위임·상수 이름·필터 ------------------------------------------------------------------
+describe(`model delegation, constant names, and filters`, () => {
+  const source = `package com.example.web;
+import jakarta.servlet.Filter;
+@Controller
+public class InvoiceController {
+  private static final String TITLE_KEY = "title";
+  @GetMapping("/invoice")
+  public String invoice(Model model, @RequestParam Map<String, String> query) {
+    viewModelService.setupInvoiceModel(model, query);
+    return "invoice/page";
+  }
+  @GetMapping("/local")
+  public String local(Model model, @RequestParam Map<String, String> query) {
+    model.addAttribute(TITLE_KEY, "x");
+    fillCommon(model);
+    service.search(query);
+    return "invoice/local";
+  }
+  @GetMapping("/mav")
+  public ModelAndView mav() {
+    return new ModelAndView("invoice/mav", buildMap());
+  }
+  private void fillCommon(Model model) {
+    model.addAttribute("common", 1);
+  }
+}
+@WebFilter(urlPatterns = {"/*"})
+public class CspNonceFilter implements Filter {
+  public static final String CSP_NONCE_ATTRIBUTE = "cspNonce";
+  public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) {
+    HttpServletRequest httpRequest = (HttpServletRequest) request;
+    httpRequest.setAttribute(CSP_NONCE_ATTRIBUTE, "n");
+    chain.doFilter(request, response);
+  }
+}
+`;
+  const [controller, filter] = parseJavaFile(source, `C:/src/InvoiceController.java`).types;
+  const handlerOf = (name: string) => controller.handlers.find((handler) => handler.methodName === name);
+
+  test(`marks a handler dynamic when it passes the model to another object`, () => {
+    expect(handlerOf(`invoice`)?.dynamic).toBe(true);
+    expect(handlerOf(`local`)?.dynamic).toBe(false);
+    expect(handlerOf(`mav`)?.dynamic).toBe(true);
+  });
+
+  test(`resolves attribute names from string constants of the same type`, () => {
+    expect(handlerOf(`local`)?.attributes.map((attribute) => attribute.name)).toEqual([`title`]);
+    expect(controller.classAttributes.map((attribute) => attribute.name)).toEqual([`title`, `common`]);
+  });
+
+  test(`treats servlet filters as global request attribute sources`, () => {
+    expect(filter.isInterceptor).toBe(true);
+    expect(filter.classAttributes.map((attribute) => [attribute.name, attribute.source])).toEqual([[`cspNonce`, `request`]]);
+    expect(filter.dynamicModel).toBe(false);
+  });
+
+  test(`keeps class-wide model validation when the model is only checked, logged, or passed by helpers`, () => {
+    const guarded = parseJavaFile(`package w;
+import ch.qos.logback.core.filter.Filter;
+public class MenuInterceptor implements HandlerInterceptor {
+  public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) {
+    if (ObjectUtils.isEmpty(modelAndView)) { return; }
+    modelAndView.addObject("menus", 1);
+  }
+}
+@ControllerAdvice
+public class CommonAdvice {
+  @ModelAttribute
+  public void common(Model model) { log.debug("model={}", model); model.addAttribute("site", 1); }
+}
+@Controller
+public class BoardController {
+  @GetMapping("/board")
+  public String list(Model model) { model.addAttribute("rows", search(new HashMap<>())); return "board/list"; }
+  @PostMapping("/board")
+  public String save(RedirectAttributes ra) { MessageUtil.success(ra); return "redirect:/board"; }
+  @GetMapping("/gone")
+  public ModelAndView gone() { return new ModelAndView("error/gone", HttpStatus.GONE); }
+  private List<Board> search(Map<String, Object> params) { return boardMapper.selectList(params); }
+}
+public class TraceFilter extends OncePerRequestFilter {
+  protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) { request.setAttribute(TraceConstants.TRACE_ID, "t"); }
+}
+public class NoiseFilter extends Filter<ILoggingEvent> {}
+`, `C:/src/Guarded.java`).types;
+    const byName = new Map(guarded.map((type) => [type.name, type]));
+    expect(guarded.filter((type) => type.dynamicModel).map((type) => type.name)).toEqual([]);
+    expect(byName.get(`BoardController`)?.handlers.map((handler) => [handler.methodName, handler.dynamic])).toEqual([[`list`, false], [`save`, false], [`gone`, false]]);
+    expect(byName.get(`TraceFilter`)?.isInterceptor).toBe(true);
+    expect(byName.get(`NoiseFilter`)?.isInterceptor).toBe(false);
+  });
+});

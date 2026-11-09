@@ -13,6 +13,7 @@ const READ_CHUNK = 32;
 const SOURCE_PATH_PATTERN = /[\\/]src[\\/]/;
 const UPDATE_DEBOUNCE_MS = 300;
 const ID_SELECTOR_PATTERN = /^#([\w-]+)$/;
+const FRAGMENT_NAME_PATTERN = /^[\w$-]+$/;
 const FRAGMENT_REF_NAMES: ReadonlySet<string> = new Set([`insert`, `replace`, `include`, `substituteby`, `decorate`, `decorator`]);
 
 // 인덱스는 AST 전체 대신 카탈로그·참조·루트 식별자 사용처만 보관 (메모리 절감)
@@ -22,6 +23,7 @@ interface TemplateEntryType {
   catalog: FragmentCatalogType;
   references: string[];
   usages: AttributeUsageType[];
+  fragmentArgs: [string, string[]][];
 }
 export interface AttributeUsageType {
   uri: vscode.Uri;
@@ -42,6 +44,7 @@ export const TemplateIndexService = () => {
   let entries = new Map<string, TemplateEntryType>();
   let byPath = new Map<string, string>();
   const includers = new Map<string, Set<string>>();
+  const fragmentArgIndex = new Map<string, Set<string>>();
   let staticPaths = new Map<string, vscode.Uri>();
   let usageIndex: Map<string, AttributeUsageType[]> | undefined;
   const emitter = new vscode.EventEmitter<void>();
@@ -84,14 +87,22 @@ export const TemplateIndexService = () => {
     }
     const template: TemplateModelType = parseTemplate(text);
 
-    // 프래그먼트 참조 템플릿명
+    // 프래그먼트 참조 템플릿명·호출 지점 이름 인자 ("템플릿::프래그먼트" -> 인자명)
     const references = new Set<string>();
+    const fragmentArgs: [string, string[]][] = [];
     for (const attribute of template.attributes) {
       if (!FRAGMENT_REF_NAMES.has(attribute.name)) {
         continue;
       }
       for (const node of attribute.parsed.expressions) {
-        node.kind === `fragment` && node.template && !node.template.dynamic && node.template.value !== `` && node.template.value !== `this` && references.add(normalizeName(node.template.value));
+        if (node.kind !== `fragment` || !node.template || node.template.dynamic) {
+          continue;
+        }
+        const local = node.template.value === `` || node.template.value === `this`;
+        local || references.add(normalizeName(node.template.value));
+        const selector = node.selector && !node.selector.dynamic ? node.selector.value.trim() : ``;
+        const argNames = node.args.map((arg) => arg.name).filter((argName) => argName !== ``);
+        FRAGMENT_NAME_PATTERN.test(selector) && argNames.length > 0 && fragmentArgs.push([`${local ? name : normalizeName(node.template.value)}::${selector}`, argNames]);
       }
     }
 
@@ -111,16 +122,22 @@ export const TemplateIndexService = () => {
 
     // 같은 이름을 다른 파일이 대체하면 이전 경로 매핑 제거
     existing && existing.uri.fsPath !== uri.fsPath && targetByPath.delete(existing.uri.fsPath);
-    targetEntries.set(name, { "name": name, "uri": uri, "catalog": { "fragments": template.fragments, "tagNames": template.tagNames, "ids": template.ids, "refs": template.refs }, "references": [...references], "usages": usages });
+    targetEntries.set(name, { "name": name, "uri": uri, "catalog": { "fragments": template.fragments, "tagNames": template.tagNames, "ids": template.ids, "refs": template.refs }, "references": [...references], "usages": usages, "fragmentArgs": fragmentArgs });
     targetByPath.set(uri.fsPath, name);
   };
   const rebuildIncluders = (): void => {
     includers.clear();
+    fragmentArgIndex.clear();
     for (const entry of entries.values()) {
       for (const reference of entry.references) {
         const set = includers.get(reference) ?? new Set<string>();
         set.add(entry.name);
         includers.set(reference, set);
+      }
+      for (const [key, argNames] of entry.fragmentArgs) {
+        const names = fragmentArgIndex.get(key) ?? new Set<string>();
+        argNames.forEach((argName) => names.add(argName));
+        fragmentArgIndex.set(key, names);
       }
     }
     usageIndex = undefined;
@@ -280,6 +297,7 @@ export const TemplateIndexService = () => {
     }
     return [...visited];
   };
+  const fragmentArgNames = (templateName: string | undefined, fragmentName: string): ReadonlySet<string> | undefined => (templateName ? fragmentArgIndex.get(`${normalizeName(templateName)}::${fragmentName}`) : undefined);
   const listTemplateNames = (): string[] => [...entries.keys()].sort();
   const templateUri = (templateName: string): vscode.Uri | undefined => entries.get(normalizeName(templateName))?.uri;
 
@@ -364,9 +382,10 @@ export const TemplateIndexService = () => {
     byPath.clear();
     staticPaths.clear();
     includers.clear();
+    fragmentArgIndex.clear();
     usageIndex = undefined;
     emitter.dispose();
   };
 
-  return { scan, findTemplateFiles, resolveTemplate, findFragmentPosition, templateNameOf, fragmentCatalog, includersOf, listTemplateNames, templateUri, attributeUsages, hasStatic, staticExists, staticUri, listStaticPaths, isReady, templateCount, revision, "onDidUpdate": emitter.event, watch, clear, dispose };
+  return { scan, findTemplateFiles, resolveTemplate, findFragmentPosition, templateNameOf, fragmentCatalog, fragmentArgNames, includersOf, listTemplateNames, templateUri, attributeUsages, hasStatic, staticExists, staticUri, listStaticPaths, isReady, templateCount, revision, "onDidUpdate": emitter.event, watch, clear, dispose };
 };

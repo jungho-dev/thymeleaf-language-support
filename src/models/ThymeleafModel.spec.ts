@@ -112,6 +112,7 @@ describe(`checkExpression`, () => {
 
   test(`reports empty, nested, and literal substitution problems`, () => {
     expect(checkExpression(`\${}`).map((item) => item.code)).toEqual([`thymeleaf-empty-expression`]);
+    expect(checkExpression(`\${cond} ? ~{a :: b} : ~{}`)).toEqual([]);
     expect(checkExpression(`\${a + \${b}}`).map((item) => item.code)).toEqual([`thymeleaf-nested-expression`]);
     expect(checkExpression(`|Hello \${name}`).map((item) => item.code)).toEqual([`thymeleaf-unclosed-literal-substitution`]);
   });

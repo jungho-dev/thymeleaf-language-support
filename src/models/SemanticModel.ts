@@ -3,14 +3,17 @@
 import { simpleTypeName } from "@models/JavaModel";
 import type { ExpressionChainType, ExpressionIssueType, ExpressionNodeType, JavaTypeType, LocalVariableType, ResolvedTypeType, ScopeType, SemanticAnalysisType, SemanticIndexType, SemanticOptionsType, SemanticResolutionType, TemplateAttributeType, TemplateModelType, TypePropertyType, TypeRefType } from "@exportTypes";
 
-const CONTEXT_ROOTS: ReadonlySet<string> = new Set([`param`, `session`, `application`, `request`, `response`, `servletContext`, `execInfo`, `root`, `this`]);
+const CONTEXT_ROOTS: ReadonlySet<string> = new Set([`param`, `session`, `application`, `request`, `response`, `servletContext`, `execInfo`, `root`, `this`, `springRequestContext`, `springMacroRequestContext`, `thymeleafRequestContext`]);
 const ITERABLE_TYPES: ReadonlySet<string> = new Set([`List`, `ArrayList`, `LinkedList`, `Set`, `HashSet`, `LinkedHashSet`, `TreeSet`, `SortedSet`, `Collection`, `Iterable`, `Page`, `Slice`, `Stream`, `Queue`, `Deque`, `ArrayDeque`, `Streamable`, `Window`]);
 const MAP_TYPES: ReadonlySet<string> = new Set([`Map`, `HashMap`, `LinkedHashMap`, `TreeMap`, `SortedMap`, `ConcurrentHashMap`]);
 const OBJECT_METHODS: ReadonlySet<string> = new Set([`toString`, `equals`, `hashCode`, `getClass`, `compareTo`, `name`, `ordinal`, `values`, `valueOf`]);
 const STAT_PROPERTIES: Readonly<Record<string, string>> = { "index": `Integer`, "count": `Integer`, "size": `Integer`, "current": `Object`, "even": `Boolean`, "odd": `Boolean`, "first": `Boolean`, "last": `Boolean` };
 const FRAGMENT_SELECTOR_NAME_PATTERN = /^[\w$-]+$/;
 const LINK_SKIP_PATTERN = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\?)/i;
+// Spring Boot·Security·WebJars 가 컨트롤러 없이 제공하는 경로
+const FRAMEWORK_LINK_PATTERN = /^\/(?:login|logout|error|webjars|actuator|swagger-ui|swagger-ui\.html|v3\/api-docs|h2-console|oauth2|saml2)(?:[/?#]|$)/;
 const MAX_RESOLVE_DEPTH = 8;
+const MAX_LINEAGE_TYPES = 32;
 const propertyCache = new WeakMap<JavaTypeType, TypePropertyType[]>();
 
 // 1. Java 타입 문자열 -> TypeRef -----------------------------------------------------------
@@ -62,7 +65,41 @@ export const resolveTypeRef = (ref: TypeRefType | undefined, index: SemanticInde
   if (!found || found.type.kind === `interface` && found.type.methods.length === 0) {
     return { "ref": ref, "open": true };
   }
-  return { "ref": ref, "open": false, "javaType": found.type, "fsPath": found.fsPath };
+  const partial = found.ambiguous === true || !collectLineage(found.type, found.fsPath, index).complete;
+  return { "ref": ref, "open": false, "javaType": found.type, "fsPath": found.fsPath, "partial": partial };
+};
+
+// 2-1. 타입 계보 (자신 -> 상위 클래스 -> 인터페이스, 너비 우선)
+// 구체 타입은 상위 클래스 체인이 워크스페이스 밖이면 complete=false (인터페이스 멤버는 직접 구현하므로 무관)
+// 루트가 인터페이스면 상위 인터페이스 중 하나라도 워크스페이스 밖이면 complete=false
+const collectLineage = (type: JavaTypeType, fsPath: string, index: SemanticIndexType): { types: { type: JavaTypeType; fsPath: string }[]; complete: boolean } => {
+  const types: { type: JavaTypeType; fsPath: string }[] = [];
+  const visited = new Set<string>();
+  const queue = [{ "type": type, "fsPath": fsPath }];
+  const rootIsInterface = type.kind === `interface`;
+  let complete = true;
+  while (queue.length > 0) {
+    const current = queue.shift() as { type: JavaTypeType; fsPath: string };
+    if (visited.has(current.type.qualifiedName) || visited.size > MAX_LINEAGE_TYPES) {
+      continue;
+    }
+    visited.add(current.type.qualifiedName);
+    types.push(current);
+    const isInterface = current.type.kind === `interface`;
+    const extendsName = current.type.extendsName !== `Object` ? current.type.extendsName : undefined;
+    const superclass = isInterface ? undefined : extendsName;
+    const interfaces = [...(isInterface && extendsName ? [extendsName] : []), ...current.type.implementsNames];
+    for (const parentName of [...(superclass ? [superclass] : []), ...interfaces]) {
+      const parent = index.resolveJavaType(parentName);
+      if (parent) {
+        queue.push({ "type": parent.type, "fsPath": parent.fsPath });
+      }
+      else if (parentName === superclass || rootIsInterface) {
+        complete = false;
+      }
+    }
+  }
+  return { "types": types, "complete": complete };
 };
 const resolveTypeName = (typeName: string | undefined, index: SemanticIndexType): ResolvedTypeType => (typeName ? resolveTypeRef(parseTypeRef(typeName), index) : { "open": true });
 
@@ -136,30 +173,35 @@ export const listProperties = (resolved: ResolvedTypeType, index: SemanticIndexT
   }
   const entries: TypePropertyType[] = [];
   const seen = new Set<string>();
-  const visited = new Set<string>();
-  let current = resolved.javaType ? { "type": resolved.javaType, "fsPath": resolved.fsPath ?? `` } : undefined;
-  while (current && !visited.has(current.type.name)) {
-    visited.add(current.type.name);
+  const lineage = resolved.javaType ? collectLineage(resolved.javaType, resolved.fsPath ?? ``, index).types : [];
+  for (const current of lineage) {
     for (const entry of propertyEntries(current.type, current.fsPath)) {
       if (!seen.has(entry.name.toLowerCase())) {
         seen.add(entry.name.toLowerCase());
         entries.push(entry);
       }
     }
-    current = current.type.extendsName ? index.resolveJavaType(current.type.extendsName) : undefined;
   }
   return entries;
 };
 export const listMethods = (resolved: ResolvedTypeType, index: SemanticIndexType): TypePropertyType[] => {
   const entries: TypePropertyType[] = [];
-  const visited = new Set<string>();
-  let current = resolved.javaType ? { "type": resolved.javaType, "fsPath": resolved.fsPath ?? `` } : undefined;
-  while (current && !visited.has(current.type.name)) {
-    visited.add(current.type.name);
-    for (const method of current.type.methods) {
-      (method.isPublic || current.type.kind === `interface`) && !method.isStatic && entries.push({ "name": method.name, "type": method.returnType, "fsPath": current.fsPath, "line": method.line, "offset": method.offset, "kind": `method` });
+  const seen = new Set<string>();
+  const add = (entry: TypePropertyType): void => {
+    if (!seen.has(entry.name)) {
+      seen.add(entry.name);
+      entries.push(entry);
     }
-    current = current.type.extendsName ? index.resolveJavaType(current.type.extendsName) : undefined;
+  };
+  const lineage = resolved.javaType ? collectLineage(resolved.javaType, resolved.fsPath ?? ``, index).types : [];
+  for (const current of lineage) {
+    // record 컴포넌트는 같은 이름의 public 접근자 메서드 (guide.sections())
+    for (const component of current.type.recordComponents) {
+      add({ "name": component.name, "type": component.type, "fsPath": current.fsPath, "line": component.line, "offset": component.offset, "kind": `method` });
+    }
+    for (const method of current.type.methods) {
+      (method.isPublic || current.type.kind === `interface`) && !method.isStatic && add({ "name": method.name, "type": method.returnType, "fsPath": current.fsPath, "line": method.line, "offset": method.offset, "kind": `method` });
+    }
   }
   return entries;
 };
@@ -193,7 +235,7 @@ const resolveLocalType = (local: LocalVariableType, scope: ScopeType, index: Sem
     }
     locals.delete(local.name);
   }
-  const ownerScope: ScopeType = { "locals": locals, "objectAttribute": scope.objectAttribute, "insideFragment": scope.insideFragment };
+  const ownerScope: ScopeType = { "locals": locals, "objectAttribute": scope.objectAttribute, "insideFragment": scope.insideFragment, "fragmentName": scope.fragmentName };
   const resolution = resolveChain(local.expression, local.expression.chains[0], ownerScope, index, options, template, scopes, depth + 1);
   const resolved = resolution?.segmentTypes.at(-1) ?? resolution?.rootType ?? { "open": true };
   if (local.kind === `each`) {
@@ -227,7 +269,7 @@ export const resolveChain = (node: ExpressionNodeType, chain: ExpressionChainTyp
       const property = findProperty(objectType, root.name, index);
       resolution.rootType = objectType.open ? { "open": true } : property ? resolveTypeName(property.type, index) : { "open": true, "ref": undefined };
       resolution.segmentProperties.push(property);
-      if (!objectType.open && !property && !OBJECT_METHODS.has(root.name)) {
+      if (!objectType.open && !objectType.partial && !property && !OBJECT_METHODS.has(root.name)) {
         resolution.rootKind = `unknown`;
       }
     }
@@ -251,11 +293,16 @@ export const resolveChain = (node: ExpressionNodeType, chain: ExpressionChainTyp
       if (attributes && attributes.length > 0) {
         resolution.rootKind = `model`;
         resolution.modelAttributes = attributes;
+
+        // 같은 이름을 여러 핸들러가 다른 타입이나 추론 불가 타입으로 넣으면 타입 미확정 (open)
+        const typeNames = new Set(attributes.map((attribute) => (attribute.typeName ? formatTypeRef(parseTypeRef(attribute.typeName)) : ``)));
         const typed = attributes.find((attribute) => attribute.typeName);
-        resolution.rootType = resolveTypeName(typed?.typeName, index);
+        resolution.rootType = typeNames.size === 1 ? resolveTypeName(typed?.typeName, index) : { "open": true };
       }
       else {
-        resolution.rootKind = context.mapped && !context.dynamic ? `unknown` : `other`;
+        // th:fragment 안에서 호출 지점이 name=value 로 넘긴 이름은 프래그먼트 지역 변수
+        const passedByCaller = scope.fragmentName !== undefined && index.fragmentArgNames?.(options.templateName, scope.fragmentName)?.has(root.name) === true;
+        resolution.rootKind = context.mapped && !context.dynamic && !passedByCaller ? `unknown` : `other`;
       }
     }
   }
@@ -278,11 +325,14 @@ export const resolveChain = (node: ExpressionNodeType, chain: ExpressionChainTyp
       resolution.segmentProperties.push(undefined);
       continue;
     }
+
+    // partial 소유 타입의 미발견 멤버는 오류 대신 open 으로 전파
+    const ownerPartial = current.partial === true;
     if (segment.kind === `property`) {
       const property = findProperty(current, segment.name, index);
       current = property ? resolveTypeName(property.type, index) : { "open": true, "ref": undefined };
       resolution.segmentProperties.push(property);
-      resolution.segmentTypes.push(property ? current : { "open": false, "ref": undefined });
+      resolution.segmentTypes.push(property ? current : ownerPartial ? { "open": true } : { "open": false, "ref": undefined });
       if (!property) {
         current = { "open": true };
       }
@@ -293,7 +343,7 @@ export const resolveChain = (node: ExpressionNodeType, chain: ExpressionChainTyp
       const known = method !== undefined || OBJECT_METHODS.has(segment.name);
       current = method ? resolveTypeName(method.type, index) : { "open": true };
       resolution.segmentProperties.push(method);
-      resolution.segmentTypes.push(known ? current : { "open": false, "ref": undefined });
+      resolution.segmentTypes.push(known ? current : ownerPartial ? { "open": true } : { "open": false, "ref": undefined });
       if (!known) {
         current = { "open": true };
       }
@@ -363,7 +413,7 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
     // 링크 존재
     if (node.kind === `link` && node.path && !node.path.dynamic && options.linkValidation && index.hasLinks()) {
       const path = node.path.value;
-      if (path.startsWith(`/`) && !LINK_SKIP_PATTERN.test(path) && !index.linkExists(path)) {
+      if (path.startsWith(`/`) && !LINK_SKIP_PATTERN.test(path) && !FRAMEWORK_LINK_PATTERN.test(path) && !index.linkExists(path)) {
         push(`thymeleaf-unknown-link`, `No controller mapping or static resource matches '${path}'.`, `information`, node.path.offset, node.path.length);
       }
     }
@@ -377,20 +427,36 @@ export const analyzeSemantics = (template: TemplateModelType, scopes: Map<number
         if (!definition && !catalog.tagNames.has(selector.toLowerCase()) && !catalog.refs.has(selector)) {
           push(`thymeleaf-unknown-fragment`, `Fragment '${selector}' was not found in template '${node.template.value || `this`}'.`, `warning`, node.selector.offset, node.selector.length);
         }
-        else if (definition && node.args.length > 0) {
+        else {
+          // 인자 규칙 (Thymeleaf 3 FragmentSignatureUtils.processParameters 기준)
+          // 1) 이름·위치 인자 혼합은 할당 시퀀스와 표현식 시퀀스 어느 쪽으로도 해석되지 않음
+          // 2) 이름 인자는 시그니처 파라미터를 모두 포함해야 하고, 추가 이름은 프래그먼트 지역 변수로 허용
+          // 3) 위치 인자는 시그니처 파라미터 수와 정확히 일치, 시그니처 없는 프래그먼트에는 사용 불가
+          // 4) 파라미터를 선언한 시그니처는 인자 없이 선택 불가
+          // th:ref·태그명 선택은 대상 요소의 th:fragment 여부를 알 수 없어 시그니처 검사 생략
           const named = node.args.filter((arg) => arg.name !== ``);
-
-          // 시그니처 없는 프래그먼트 이름 인자
-          if (named.length > 0 && definition.params.length === 0) {
-            named.length !== node.args.length && push(`thymeleaf-fragment-arity`, `Fragment '${selector}' declares no parameters. Pass values by name only (name=value).`, `warning`, node.offset, node.length);
+          const positionalCount = node.args.length - named.length;
+          const signature = definition ? `${definition.name}(${definition.params.join(`, `)})` : ``;
+          if (named.length > 0 && positionalCount > 0) {
+            push(`thymeleaf-fragment-arity`, `Fragment '${selector}' mixes named and positional arguments. Pass all values by name (name=value) or all by position.`, `warning`, node.offset, node.length);
           }
           else if (named.length > 0) {
+            const passedNames = new Set<string>();
             for (const arg of named) {
-              definition.params.includes(arg.name) || push(`thymeleaf-fragment-arity`, `Fragment '${selector}' has no parameter '${arg.name}'. Parameters: ${definition.params.join(`, `) || `(none)`}.`, `warning`, arg.offset, arg.length);
+              passedNames.has(arg.name) && push(`thymeleaf-fragment-arity`, `Fragment argument '${arg.name}' is passed more than once. The last value wins.`, `warning`, arg.offset, arg.length);
+              passedNames.add(arg.name);
             }
+            const missing = (definition?.params ?? []).filter((param) => !passedNames.has(param));
+            missing.length > 0 && push(`thymeleaf-fragment-arity`, `Fragment '${selector}' requires ${missing.map((param) => `'${param}'`).join(`, `)} when arguments are passed by name. Signature: ${signature}.`, `warning`, node.offset, node.length);
           }
-          else if (node.args.length !== definition.params.length) {
-            push(`thymeleaf-fragment-arity`, `Fragment '${selector}' expects ${definition.params.length} argument(s) but ${node.args.length} were given.`, `warning`, node.offset, node.length);
+          else if (positionalCount > 0 && definition && definition.params.length === 0) {
+            push(`thymeleaf-fragment-arity`, `Fragment '${selector}' declares no parameters. Pass values by name only (name=value).`, `warning`, node.offset, node.length);
+          }
+          else if (positionalCount > 0 && definition && positionalCount !== definition.params.length) {
+            push(`thymeleaf-fragment-arity`, `Fragment '${selector}' expects ${definition.params.length} argument(s) but ${positionalCount} were given. Signature: ${signature}.`, `warning`, node.offset, node.length);
+          }
+          else if (node.args.length === 0 && definition && definition.params.length > 0) {
+            push(`thymeleaf-fragment-arity`, `Fragment '${selector}' declares parameters but none were given. Signature: ${signature}.`, `warning`, node.offset, node.length);
           }
         }
       }
@@ -423,4 +489,5 @@ const withoutEachLocals = (scope: ScopeType, attribute: TemplateAttributeType): 
   "locals": new Map([...scope.locals].filter(([, local]) => local.attribute !== attribute)),
   "objectAttribute": scope.objectAttribute,
   "insideFragment": scope.insideFragment,
+  "fragmentName": scope.fragmentName,
 });

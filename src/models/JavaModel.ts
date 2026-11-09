@@ -14,10 +14,20 @@ const RETURN_PATTERN = /\breturn\b([^;]*);/g;
 const STRING_LITERAL_PATTERN = /"((?:[^"\\]|\\.)*)"/g;
 const NEW_MAV_PATTERN = /new\s+ModelAndView\s*\(\s*"([^"]*)"(?:\s*,\s*"([^"]*)"\s*,)?/g;
 const SET_VIEW_PATTERN = /\.\s*setViewName\s*\(\s*"([^"]*)"/g;
+const CALL_NAME_PATTERN = /([A-Za-z_$][\w$]*)\s*\(/g;
+const STRING_CONSTANT_PATTERN = /\b(?:static\s+final|final\s+static)\s+String\s+([A-Za-z_$][\w$]*)\s*=\s*"((?:[^"\\]|\\.)*)"\s*;/g;
+const CALL_RECEIVER_PATTERN = /([A-Za-z_$][\w$]*)\s*\.\s*$/;
+const MODEL_LOCAL_PATTERN = /\b(?:Model|ModelMap|ExtendedModelMap|ModelAndView)\s+([a-z_$][\w$]*)\s*=/g;
+const SERVLET_FILTER_IMPORT_PATTERN = /^(?:javax|jakarta)\.servlet\.(?:Filter|\*)$/;
 const LOCAL_DECL_PATTERN = /(?<![\w.])((?:[A-Z][\w.]*|var)(?:\s*<[^;=()]*?>)?(?:\s*\[\s*\])*)\s+([a-z_$][\w$]*)\s*(=|;|:)/g;
 const KEYWORD_SET: ReadonlySet<string> = new Set([`return`, `new`, `throw`, `else`, `case`, `import`, `package`, `public`, `private`, `protected`, `static`, `final`, `abstract`, `if`, `for`, `while`, `switch`, `try`, `catch`, `finally`, `do`, `synchronized`, `instanceof`]);
 const MAPPING_ANNOTATIONS: Readonly<Record<string, string[]>> = { "RequestMapping": [], "GetMapping": [`GET`], "PostMapping": [`POST`], "PutMapping": [`PUT`], "DeleteMapping": [`DELETE`], "PatchMapping": [`PATCH`] };
+const MODEL_DELEGATE_TYPES: ReadonlySet<string> = new Set([`Model`, `ModelMap`, `ExtendedModelMap`, `ModelAndView`, `Map`]);
+const NEUTRAL_RECEIVERS: ReadonlySet<string> = new Set([`Objects`, `ObjectUtils`, `StringUtils`, `CollectionUtils`, `Assert`, `Optional`, `String`, `System`, `log`, `logger`, `LOG`, `LOGGER`]);
+const NON_CALL_WORDS: ReadonlySet<string> = new Set([`if`, `for`, `while`, `switch`, `catch`, `synchronized`, `return`, `throw`, `assert`]);
 const INTERCEPTOR_TYPES: ReadonlySet<string> = new Set([`HandlerInterceptor`, `AsyncHandlerInterceptor`, `WebRequestInterceptor`, `AsyncWebRequestInterceptor`, `HandlerInterceptorAdapter`]);
+// 서블릿 필터도 request.setAttribute 로 모든 템플릿에 값을 노출하므로 전역 모델 소스 (단순명 Filter 는 servlet import 가 있을 때만)
+const SERVLET_FILTER_TYPES: ReadonlySet<string> = new Set([`OncePerRequestFilter`, `GenericFilterBean`, `HttpFilter`]);
 const MODEL_RECEIVER_TYPES: ReadonlySet<string> = new Set([`Model`, `ModelMap`, `ExtendedModelMap`, `ModelAndView`, `RedirectAttributes`, `RedirectAttributesModelMap`, `Map`, `HashMap`, `LinkedHashMap`, `HttpServletRequest`, `HttpSession`, `WebRequest`, `ServletRequest`]);
 const SIMPLE_TYPES: ReadonlySet<string> = new Set([`String`, `int`, `long`, `short`, `byte`, `char`, `boolean`, `double`, `float`, `Integer`, `Long`, `Short`, `Byte`, `Character`, `Boolean`, `Double`, `Float`, `BigDecimal`, `BigInteger`, `LocalDate`, `LocalDateTime`, `LocalTime`, `Date`, `UUID`, `Object`, `Number`, `CharSequence`]);
 const FRAMEWORK_PARAM_TYPES: ReadonlySet<string> = new Set([`Model`, `ModelMap`, `ModelAndView`, `HttpServletRequest`, `HttpServletResponse`, `HttpSession`, `Principal`, `Authentication`, `Locale`, `BindingResult`, `Errors`, `RedirectAttributes`, `Pageable`, `Sort`, `MultipartFile`, `WebRequest`, `NativeWebRequest`, `ServletRequest`, `ServletResponse`, `SessionStatus`, `TimeZone`, `ZoneId`, `InputStream`, `OutputStream`, `Reader`, `Writer`, `HttpMethod`, `HttpEntity`, `RequestEntity`, `UriComponentsBuilder`, `ServletUriComponentsBuilder`, `PushBuilder`, `CsrfToken`, `UserDetails`, `MultipartHttpServletRequest`, `HttpHeaders`, `Map`, `List`, `Set`, `Collection`, `Optional`, `Device`]);
@@ -251,6 +261,7 @@ export const parseJavaFile = (text: string, fsPath: string): JavaFileType => {
   const lineStarts = buildLineStarts(text);
   const packageName = PACKAGE_PATTERN.exec(masked)?.[1] ?? ``;
   const imports = [...masked.matchAll(IMPORT_PATTERN)].map((match) => match[1]);
+  const servletFilterImported = imports.some((imported) => SERVLET_FILTER_IMPORT_PATTERN.test(imported));
   const types: JavaTypeType[] = [];
   const positionOf = (offset: number) => offsetToPosition(lineStarts, offset);
 
@@ -269,8 +280,11 @@ export const parseJavaFile = (text: string, fsPath: string): JavaFileType => {
       const kind = match[1] as JavaTypeType[`kind`];
       const name = match[2];
       const qualifiedName = outerName ? `${outerName}.${name}` : packageName ? `${packageName}.${name}` : name;
-      const extendsName = match[4] ? simpleTypeName(splitTopLevel(match[4])[0] ?? ``) : undefined;
-      const implementsNames = match[5] ? splitTopLevel(match[5]).map(simpleTypeName) : [];
+
+      // 인터페이스는 extends 로 여러 상위 인터페이스를 받음 (첫 번째는 extendsName, 나머지는 implementsNames)
+      const extendsList = match[4] ? splitTopLevel(match[4]).map(simpleTypeName).filter((parent) => parent !== ``) : [];
+      const extendsName = extendsList[0];
+      const implementsNames = [...(kind === `interface` ? extendsList.slice(1) : []), ...(match[5] ? splitTopLevel(match[5]).map(simpleTypeName) : [])];
 
       // 중첩 타입 범위 수집
       const nestedRanges: [number, number][] = [];
@@ -365,7 +379,7 @@ export const parseJavaFile = (text: string, fsPath: string): JavaFileType => {
         "isController": hasAnnotation(annotations, `Controller`),
         "isRestController": hasAnnotation(annotations, `RestController`),
         "isControllerAdvice": hasAnnotation(annotations, `ControllerAdvice`) || hasAnnotation(annotations, `RestControllerAdvice`),
-        "isInterceptor": implementsNames.some((implemented) => INTERCEPTOR_TYPES.has(implemented)) || (extendsName !== undefined && INTERCEPTOR_TYPES.has(extendsName)),
+        "isInterceptor": [...implementsNames, extendsName ?? ``].some((parent) => INTERCEPTOR_TYPES.has(parent) || SERVLET_FILTER_TYPES.has(parent) || (parent === `Filter` && servletFilterImported)),
         "classPaths": annotationLiterals(findAnnotation(annotations, `RequestMapping`)?.args ?? ``, [`value`, `path`]),
         "sessionAttributes": annotationLiterals(findAnnotation(annotations, `SessionAttributes`)?.args ?? ``, [`value`, `names`]),
         "handlers": [],
@@ -400,6 +414,8 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
   const body = masked.slice(type.bodyStart, type.bodyEnd + 1);
   const attributesByMethod = new Map<string, ModelAttributeType[]>();
   const dynamicMethods = new Set<string>();
+  const isServletFilter = type.isInterceptor && ![...type.implementsNames, type.extendsName ?? ``].some((parent) => INTERCEPTOR_TYPES.has(parent));
+  const stringConstants = new Map([...body.matchAll(STRING_CONSTANT_PATTERN)].map((constant): [string, string] => [constant[1], constant[2]]));
   MODEL_CALL_PATTERN.lastIndex = 0;
   for (const call of body.matchAll(MODEL_CALL_PATTERN)) {
     const absolute = type.bodyStart + call.index;
@@ -442,13 +458,20 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
     if (source === `session`) {
       continue;
     }
-    const literal = /^"((?:[^"\\]|\\.)*)"$/.exec(args[0] ?? ``);
-    if (!literal) {
-      dynamicMethods.add(ownerName);
+
+    // 속성명: 문자열 리터럴 또는 같은 타입의 static final String 상수, 그 외는 이름을 알 수 없어 dynamic
+    const nameArg = (args[0] ?? ``).trim();
+    const literal = /^"((?:[^"\\]|\\.)*)"$/.exec(nameArg);
+    const constantName = nameArg.startsWith(`${type.name}.`) ? nameArg.slice(type.name.length + 1) : nameArg;
+    const attributeName = literal ? literal[1] : stringConstants.get(constantName);
+
+    // 필터의 미해석 이름은 건너뜀 (전역 dynamic 으로 모든 템플릿 검사를 끄지 않음)
+    if (attributeName === undefined) {
+      isServletFilter || dynamicMethods.add(ownerName);
       continue;
     }
-    const literalOffset = masked.indexOf(`"`, openParen) + 1;
-    const attribute = buildAttribute(literal[1], literalOffset, literal[1].length, source, ownerName, args[1]);
+    const nameOffset = literal ? masked.indexOf(`"`, openParen) + 1 : masked.indexOf(nameArg, openParen);
+    const attribute = buildAttribute(attributeName, nameOffset, literal ? attributeName.length : nameArg.length, source, ownerName, args[1]);
     if (source === `flash`) {
       type.flashAttributes.push(attribute);
     }
@@ -460,14 +483,51 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
     }
   }
 
-  // 9-2. ModelAndView 생성자 속성
-  NEW_MAV_PATTERN.lastIndex = 0;
-  for (const mav of body.matchAll(NEW_MAV_PATTERN)) {
-    if (!mav[2]) {
+  // 9-2. 핸들러의 모델 위임 호출 (다른 객체·상위 클래스 메서드에 모델을 넘기면 그 핸들러만 dynamic)
+  // 같은 클래스 메서드는 9-1 에서 classAttributes 로 수집됨, 클래스 전체(dynamicModel)로는 전파하지 않음
+  const delegatingHandlers = new Set<string>();
+  const ownMethodNames = new Set(type.methods.map((method) => method.name));
+  for (const method of type.methods) {
+    if (method.bodyStart < 0 || !method.annotations.some((annotation) => annotation.name in MAPPING_ANNOTATIONS)) {
       continue;
     }
+    const methodBody = masked.slice(method.bodyStart, method.bodyEnd + 1);
+    const modelParams = method.params.filter((param) => MODEL_DELEGATE_TYPES.has(simpleTypeName(param.type)) && !param.annotations.some((annotation) => EXCLUDED_PARAM_ANNOTATIONS.has(annotation.name)));
+    const modelNames = new Set(modelParams.map((param) => param.name));
+    for (const local of methodBody.matchAll(MODEL_LOCAL_PATTERN)) {
+      modelNames.add(local[1]);
+    }
+    if (modelNames.size === 0) {
+      continue;
+    }
+    for (const call of methodBody.matchAll(CALL_NAME_PATTERN)) {
+      const callName = call[1];
+      const receiver = CALL_RECEIVER_PATTERN.exec(methodBody.slice(Math.max(0, call.index - 120), call.index))?.[1];
+      const sameClass = (receiver === undefined || receiver === `this`) && ownMethodNames.has(callName);
+      if (NON_CALL_WORDS.has(callName) || sameClass || (receiver !== undefined && (modelNames.has(receiver) || NEUTRAL_RECEIVERS.has(receiver)))) {
+        continue;
+      }
+      const openParen = call.index + call[0].length - 1;
+      const closeParen = findMatching(methodBody, openParen, `(`, `)`);
+      if (closeParen > openParen && splitTopLevel(methodBody.slice(openParen + 1, closeParen)).some((arg) => modelNames.has(arg.trim()))) {
+        delegatingHandlers.add(method.name);
+        break;
+      }
+    }
+  }
+
+  // 9-3. ModelAndView 생성자 속성 (new ModelAndView("view", map) 의 Map 내용은 알 수 없어 그 핸들러만 dynamic)
+  NEW_MAV_PATTERN.lastIndex = 0;
+  for (const mav of body.matchAll(NEW_MAV_PATTERN)) {
     const absolute = type.bodyStart + mav.index;
     const owner = methodAt(absolute)?.name ?? ``;
+    if (!mav[2]) {
+      const openParen = masked.indexOf(`(`, absolute);
+      const closeParen = findMatching(masked, openParen, `(`, `)`);
+      const mavArgs = closeParen > openParen ? splitTopLevel(masked.slice(openParen + 1, closeParen)) : [];
+      mavArgs.length === 2 && !/^\s*HttpStatus/.test(mavArgs[1]) && delegatingHandlers.add(owner);
+      continue;
+    }
     const literalOffset = masked.indexOf(`"`, masked.indexOf(`,`, absolute)) + 1;
     const attribute = buildAttribute(mav[2], literalOffset, mav[2].length, `view`, owner);
     type.classAttributes.push(attribute);
@@ -476,7 +536,7 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
     attributesByMethod.set(owner, list);
   }
 
-  // 9-3. 핸들러·@ModelAttribute 메서드
+  // 9-4. 핸들러·@ModelAttribute 메서드
   for (const method of type.methods) {
     const mapping = method.annotations.find((annotation) => annotation.name in MAPPING_ANNOTATIONS);
     const modelAttributeAnnotation = findAnnotation(method.annotations, `ModelAttribute`);
@@ -508,7 +568,7 @@ const analyzeController = (type: JavaTypeType, masked: string, fsPath: string, l
     const rendersView = !type.isRestController && !hasAnnotation(type.annotations, `ResponseBody`) && !hasAnnotation(method.annotations, `ResponseBody`);
     const viewNames = rendersView ? collectViewNames(masked, method, paths, positionOf) : [];
     const attributes = rendersView ? [...(attributesByMethod.get(method.name) ?? []), ...paramAttributes] : [];
-    type.handlers.push({ "methodName": method.name, "line": method.line, "offset": method.offset, "paths": paths, "httpMethods": httpMethods, "viewNames": viewNames, "attributes": attributes, "dynamic": dynamicMethods.has(method.name) });
+    type.handlers.push({ "methodName": method.name, "line": method.line, "offset": method.offset, "paths": paths, "httpMethods": httpMethods, "viewNames": viewNames, "attributes": attributes, "dynamic": dynamicMethods.has(method.name) || delegatingHandlers.has(method.name) });
   }
   type.dynamicModel = dynamicMethods.size > 0;
 };

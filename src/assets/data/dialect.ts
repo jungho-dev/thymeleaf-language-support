@@ -50,6 +50,10 @@ const HTML_ATTRIBUTE_NAMES = [
   `value`, `valuetype`, `width`, `wrap`, `xmlbase`, `xmllang`, `xmlspace`,
   `async`, `autofocus`, `autoplay`, `checked`, `controls`, `declare`, `default`, `defer`, `disabled`, `formnovalidate`, `hidden`, `ismap`,
   `loop`, `multiple`, `novalidate`, `nowrap`, `open`, `pubdate`, `readonly`, `required`, `reversed`, `scoped`, `seamless`, `selected`,
+  `allow`, `allowfullscreen`, `as`, `autocapitalize`, `blocking`, `capture`, `color`, `coords`, `crossorigin`, `decoding`, `dirname`,
+  `download`, `enterkeyhint`, `fetchpriority`, `imagesizes`, `imagesrcset`, `inert`, `integrity`, `is`, `itemid`, `itemprop`, `itemref`,
+  `itemscope`, `itemtype`, `loading`, `muted`, `nomodule`, `nonce`, `part`, `ping`, `playsinline`, `popover`, `popovertarget`,
+  `popovertargetaction`, `referrerpolicy`, `shape`, `slot`, `srcdoc`, `translate`,
 ];
 
 // 3. Spring Security 다이얼렉트 --------------------------------------------------------

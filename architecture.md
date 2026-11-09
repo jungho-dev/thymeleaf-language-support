@@ -98,6 +98,10 @@ analyzeSemantics(template, scopes, index, options)
   -> diagnostics: unknown model attribute, unknown property, selection without object, message key/arity,
      link existence, fragment existence/arity
      roots on the left of an elvis `?:` or followed by `?.` are optional and skip the unknown model attribute check
+     inside a th:fragment, roots that some workspace call site passes as name=value (fragmentArgNames) are
+     fragment-local; layout:fragment bodies get no such exemption
+     a type whose superclass or super-interface is outside the workspace, or whose simple name is shared by
+     several types, is partial: missing members are not reported
 ```
 
 ## Java Indexing
@@ -134,6 +138,8 @@ th:replace="~{fragments/footer :: copy(${year})}"
   -> TemplateIndexService.templateUri / resolveTemplate (indexed catalog first, findFiles fallback)
   -> fragmentCatalog(template): fragments with params, element tag names, ids, th:ref markers
   -> findFragmentPosition: th:fragment name, then th:ref marker, then id="..." selector, then tag name, else line 0
-  -> arity: positional args must match the signature; named args must be declared, except on a fragment without
-     a signature, where they become fragment-local variables
+  -> arity (Thymeleaf FragmentSignatureUtils.processParameters): positional args must match the signature count and
+     need a signature; named args must cover every signature parameter, and extra names become fragment-local
+     variables; mixed named and positional args, duplicate names, and a parameterized signature selected without
+     args are reported; th:ref and tag-name selections skip the signature check
 ```

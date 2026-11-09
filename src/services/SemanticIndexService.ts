@@ -49,5 +49,6 @@ export const SemanticIndexService = (javaIndex: JavaIndexServiceType, messageInd
     "hasLinks": () => javaIndex.hasLinks() || templateIndex.hasStatic(),
     "linkExists": (path) => javaIndex.linkExists(path) || templateIndex.staticExists(path),
     "fragmentCatalog": (templateName) => templateIndex.fragmentCatalog(templateName),
+    "fragmentArgNames": (templateName, fragmentName) => templateIndex.fragmentArgNames(templateName, fragmentName),
   };
 };

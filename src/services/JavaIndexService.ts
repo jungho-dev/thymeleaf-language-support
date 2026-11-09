@@ -9,6 +9,7 @@ const MAIN = `Thymeleaf-Language-Support`;
 const MAX_JAVA_FILES = 6000;
 const PARSE_CHUNK = 32;
 const UPDATE_DEBOUNCE_MS = 400;
+const TEST_PATH_PATTERN = /[\\/](test|tests)[\\/]/;
 const ERROR_ATTRIBUTES = [`timestamp`, `status`, `error`, `exception`, `message`, `trace`, `path`, `errors`];
 
 export interface HandlerRefType {
@@ -72,7 +73,7 @@ export const JavaIndexService = (isWanted: () => boolean = () => true) => {
     controllerTotal = 0;
     revisionCount++;
     for (const file of files.values()) {
-      const isTest = /[\\/](test|tests)[\\/]/.test(file.fsPath);
+      const isTest = TEST_PATH_PATTERN.test(file.fsPath);
       for (const type of file.types) {
         const entries = typeIndex.get(type.name) ?? [];
         isTest ? entries.push({ "type": type, "fsPath": file.fsPath }) : entries.unshift({ "type": type, "fsPath": file.fsPath });
@@ -87,7 +88,8 @@ export const JavaIndexService = (isWanted: () => boolean = () => true) => {
         for (const handler of type.handlers) {
           const ref: HandlerRefType = { "type": type, "handler": handler, "fsPath": file.fsPath };
           for (const view of handler.viewNames) {
-            const name = view.name.replace(/^\/+/, ``);
+            // 템플릿명과 같은 규칙으로 정규화 (return "main.html" -> main)
+            const name = view.name.trim().replace(/^\/+/, ``).replace(/\.html?$/i, ``);
             const refs = viewIndex.get(name) ?? [];
             refs.push(ref);
             viewIndex.set(name, refs);
@@ -260,7 +262,15 @@ export const JavaIndexService = (isWanted: () => boolean = () => true) => {
   };
 
   // 2-2. 조회 API
-  const resolveJavaType = (simpleName: string): { type: JavaTypeType; fsPath: string } | undefined => typeIndex.get(simpleName)?.[0];
+  // 단순 이름이 같은 비테스트 타입이 여럿이면 ambiguous (참조 쪽 import 문맥 없이는 어느 타입인지 알 수 없음)
+  const resolveJavaType = (simpleName: string): { type: JavaTypeType; fsPath: string; ambiguous: boolean } | undefined => {
+    const candidates = typeIndex.get(simpleName);
+    if (!candidates || candidates.length === 0) {
+      return undefined;
+    }
+    const qualifiedNames = new Set(candidates.filter((candidate) => !TEST_PATH_PATTERN.test(candidate.fsPath)).map((candidate) => candidate.type.qualifiedName));
+    return { "type": candidates[0].type, "fsPath": candidates[0].fsPath, "ambiguous": qualifiedNames.size > 1 };
+  };
   const viewRefs = (templateName: string): HandlerRefType[] => viewIndex.get(templateName) ?? [];
   const hasLinks = (): boolean => urlIndex.length > 0;
   const linkExists = (path: string): boolean => {

@@ -154,6 +154,8 @@ export interface ScopeType {
   locals: Map<string, LocalVariableType>;
   objectAttribute?: TemplateAttributeType;
   insideFragment: boolean;
+  // 가장 가까운 상위 th:fragment 이름 (layout:fragment 제외)
+  fragmentName?: string;
 }
 
 // 진단 ---------------------------------------------------------------------------
@@ -325,6 +327,8 @@ export interface ResolvedTypeType {
   open: boolean;
   javaType?: JavaTypeType;
   fsPath?: string;
+  // 워크스페이스 밖 상위 타입·동명 타입 때문에 멤버 목록이 불완전하면 true (미발견 멤버를 오류로 보고하지 않음)
+  partial?: boolean;
 }
 export interface FragmentCatalogType {
   fragments: TemplateFragmentType[];
@@ -334,12 +338,14 @@ export interface FragmentCatalogType {
 }
 export interface SemanticIndexType {
   modelContextFor: (templateName: string | undefined) => ModelContextType;
-  resolveJavaType: (simpleName: string) => { type: JavaTypeType; fsPath: string } | undefined;
+  resolveJavaType: (simpleName: string) => { type: JavaTypeType; fsPath: string; ambiguous?: boolean } | undefined;
   hasMessages: () => boolean;
   findMessages: (key: string) => MessageEntryType[];
   hasLinks: () => boolean;
   linkExists: (path: string) => boolean;
   fragmentCatalog: (templateName: string | undefined) => FragmentCatalogType | undefined;
+  // 워크스페이스 호출 지점이 이 프래그먼트에 name=value 로 넘긴 인자 이름
+  fragmentArgNames?: (templateName: string | undefined, fragmentName: string) => ReadonlySet<string> | undefined;
 }
 export interface SemanticOptionsType {
   templateName?: string;

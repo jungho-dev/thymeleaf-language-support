@@ -4,14 +4,16 @@ import type { AttributeKindType, ChainRootType, ChainSegmentType, ExpressionChai
 
 const IDENT_PATTERN = /[A-Za-z_$][\w$]*/y;
 const TOKEN_PATTERN = /[A-Za-z0-9[\]._-]+/y;
-const NUMBER_PATTERN = /\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[LlFfDd]?|0[xX][0-9a-fA-F]+/y;
+const NUMBER_PATTERN = /0[xX][0-9a-fA-F]+[Ll]?|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[LlFfDd]?/y;
 const PARAM_NAME_PATTERN = /[\w.:[\]-]+/y;
 const NAMED_ARG_PATTERN = /[A-Za-z_][\w]*\s*=(?!=)/y;
 const EACH_HEAD_PATTERN = /\s*([A-Za-z_$][\w$]*)\s*(?:,\s*([A-Za-z_$][\w$]*)\s*)?:(?!:)/y;
 const FRAGMENT_DEF_PATTERN = /^\s*([\w$-]+)\s*(?:\(([^)]*)\))?\s*$/;
 const TYPE_NAME_PATTERN = /[\w.$]+(?:\s*<[^>]*>)?(?:\s*\[\s*\])*/y;
 const EMBEDDED_KIND_MAP: Readonly<Record<string, ExpressionKindType>> = { "$": `variable`, "*": `selection`, "#": `message`, "@": `link`, "~": `fragment` };
-const SYMBOL_RELATIONAL = [`==`, `!=`, `>=`, `<=`, `>`, `<`];
+// 속성값은 평가 전에 HTML 엔티티가 해제되므로 &lt; &gt; 형태도 연산자
+const SYMBOL_RELATIONAL = [`==`, `!=`, `>=`, `<=`, `&gt;=`, `&lt;=`, `>`, `<`, `&gt;`, `&lt;`];
+const SYMBOL_AND = [`&&`, `&amp;&amp;`];
 const WORD_RELATIONAL = [`eq`, `ne`, `gt`, `ge`, `lt`, `le`];
 const SPEL_WORD_RELATIONAL = [...WORD_RELATIONAL, `instanceof`, `matches`, `between`];
 const SPEL_KEYWORDS: ReadonlySet<string> = new Set([`and`, `or`, `not`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `div`, `mod`, `instanceof`, `matches`, `between`]);
@@ -161,7 +163,7 @@ class ExpressionScanner {
     this.parseNot(stops);
     while (true) {
       this.skipWs();
-      if (this.consumeWord(`and`) || this.consume(`&&`)) {
+      if (this.consumeWord(`and`) || this.consumeAny(SYMBOL_AND)) {
         this.parseNot(stops);
         continue;
       }
@@ -581,7 +583,7 @@ class ExpressionScanner {
     this.parseSpelNot(stops, node);
     while (true) {
       this.skipWs();
-      if (this.consumeWord(`and`) || this.consume(`&&`)) {
+      if (this.consumeWord(`and`) || this.consumeAny(SYMBOL_AND)) {
         this.parseSpelNot(stops, node);
         continue;
       }
@@ -631,7 +633,7 @@ class ExpressionScanner {
   }
   parseSpelUnary(stops: string, node: ExpressionNodeType): void {
     this.skipWs();
-    if ((this.peek() === `-` || this.peek() === `+`) && !/\d/.test(this.peek(1))) {
+    if (this.peek() === `-` || this.peek() === `+`) {
       this.pos++;
       this.parseSpelUnary(stops, node);
       return;

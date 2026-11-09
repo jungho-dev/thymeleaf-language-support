@@ -373,7 +373,7 @@ export const buildScopes = (template: TemplateModelType): Map<number, ScopeType>
   const scopes = new Map<number, ScopeType>();
   for (const element of template.elements) {
     const parentScope = element.parent >= 0 ? scopes.get(element.parent) : undefined;
-    const scope: ScopeType = { "locals": new Map(parentScope?.locals ?? []), "objectAttribute": parentScope?.objectAttribute, "insideFragment": parentScope?.insideFragment ?? false };
+    const scope: ScopeType = { "locals": new Map(parentScope?.locals ?? []), "objectAttribute": parentScope?.objectAttribute, "insideFragment": parentScope?.insideFragment ?? false, "fragmentName": parentScope?.fragmentName };
     for (const attribute of element.attributes) {
       if (attribute.prefix === `th` && attribute.name === `each`) {
         const [item, stat] = attribute.parsed.eachVars;
@@ -389,6 +389,7 @@ export const buildScopes = (template: TemplateModelType): Map<number, ScopeType>
       }
       else if (attribute.name === `fragment` && (attribute.prefix === `th` || attribute.prefix === `layout`)) {
         scope.insideFragment = true;
+        attribute.prefix === `th` && attribute.parsed.fragmentName && (scope.fragmentName = attribute.parsed.fragmentName);
         for (const param of attribute.parsed.fragmentParams) {
           scope.locals.set(param, { "name": param, "kind": `fragment-param`, "attribute": attribute });
         }
@@ -507,7 +508,9 @@ export const checkExpression = (value: string): ExpressionIssueType[] => {
       const closedFrame = stack.pop() ?? top;
       if (closedFrame.kind !== `` && ch === `}`) {
         const inner = value.slice(closedFrame.offset + 2, cursor);
-        if (inner.trim() === ``) {
+
+        // ~{} 는 Thymeleaf 빈 프래그먼트 (FragmentExpression.EMPTY_FRAGMENT_EXPRESSION)
+        if (inner.trim() === `` && closedFrame.kind !== `~`) {
           issues.push({ "code": `thymeleaf-empty-expression`, "message": `Empty ${closedFrame.kind}{} expression.`, "severity": `warning`, "offset": closedFrame.offset, "length": cursor - closedFrame.offset + 1 });
         }
         else if (closedFrame.kind === `#`) {
